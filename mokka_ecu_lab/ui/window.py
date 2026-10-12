@@ -20,6 +20,7 @@ from mokka_ecu_lab.logging import list_sessions, export_csv, export_jsonl
 from mokka_ecu_lab.analysis import interpretations, compare
 from mokka_ecu_lab.replay import Replay
 from mokka_ecu_lab.protocols import support_state
+from mokka_ecu_lab.adapter.scheduling import priority_weights, nominal_interval
 
 STYLE = """
 QWidget { background: #121923; color: #e4eaf2; font-family: 'Segoe UI'; font-size: 13px; }
@@ -76,6 +77,12 @@ class MainWindow(QMainWindow):
         self.recording_started = None
         self.request_count = self.error_count = 0
         self.connected = False
+        self.polling_active = False
+        self.user_paused = False
+        self.requires_reconnect = False
+        self.acquisition_reason = "No acquisition"
+        self.context_id = None
+        self.priorities = {pid: 3 if pid == 12 else 2 if pid == 5 else 1 for pid in self.registry}
         self.mode = "Disconnected"
         self.analysis_rows, self.analysis_report, self.comparison_summary = [], {}, []
         self.settings = QSettings("MokkaECULab", "Desktop")
@@ -103,8 +110,17 @@ class MainWindow(QMainWindow):
         return b
 
     def send(self, action, **kwargs):
+        if action in {"stop", "disconnect", "replay", "shutdown", "connect"}:
+            self.polling_active = False
+            self.user_paused = action != "connect"
+            self.acquisition_reason = "Polling stopped by user" if action == "stop" else "Connection changing / offline"
+        elif action == "start": self.user_paused = False
         try: self.worker.submit(action, **kwargs)
         except Exception as exc: self.notice(str(exc))
+
+    def finish_session(self):
+        self.send("stop")
+        self.send("record_stop")
 
     def notice(self, message):
         self.statusBar().showMessage(message, 20000)
@@ -124,7 +140,7 @@ class MainWindow(QMainWindow):
         self.rate.valueChanged.connect(lambda v: self.send("rate", rate=v))
         self.connect_button = self.button("Connect", self.connect_adapter, "primary")
         self.disconnect_button = self.button("Disconnect", lambda: self.send("disconnect"), "stop")
-        self.stop_button = self.button("Stop", lambda: self.send("stop"), "stop")
+        self.stop_button = self.button("Stop polling", lambda: self.send("stop"), "stop")
         self.start_button = self.button("Resume", lambda: self.send("start"))
         for w in (self.source, self.port, self.button("Refresh ports", self.refresh_ports), self.baud, self.scenario, self.rate,
                   self.connect_button, self.disconnect_button, self.stop_button, self.start_button): row.addWidget(w)
@@ -149,6 +165,8 @@ class MainWindow(QMainWindow):
     def connect_adapter(self):
         self.readings.clear(); self.support.clear(); self.history.clear(); self.sensor_errors.clear(); self.ecu.clear(); self.ecu.addItem("Automatic first responding ECU", "")
         self.support_pages.clear()
+        self.mode = "Connecting"
+        self.connected = False
         self.request_count = self.error_count = 0
         self.connect_button.setEnabled(False)
         self.send("connect", simulation=self.source.currentIndex() == 0,
@@ -169,6 +187,23 @@ class MainWindow(QMainWindow):
         self.record_stop_button = self.button("Stop Recording", lambda: self.send("record_stop"))
         for w in (QLabel("ECU source:"), self.ecu, self.units, self.greek, self.record_button, self.record_stop_button): row.addWidget(w)
         layout.addLayout(row)
+        instructions = QLabel("Before switching ignition OFF: Stop Recording and Stop polling, then Disconnect. Finish session stops both; Disconnect also closes any open recording.")
+        instructions.setWordWrap(True); layout.addWidget(instructions)
+        priority_row = QHBoxLayout()
+        self.use_priorities = QCheckBox("Use sensor priorities (same total rate ceiling)")
+        self.priority_sensor = QComboBox()
+        for pid, sensor in self.registry.items(): self.priority_sensor.addItem(sensor.name, pid)
+        self.priority_weight = QSpinBox(); self.priority_weight.setRange(1, 4)
+        self.priority_weight.setValue(self.priorities[self.priority_sensor.currentData()])
+        self.priority_sensor.currentIndexChanged.connect(self.select_priority)
+        self.priority_weight.valueChanged.connect(self.change_priority)
+        self.use_priorities.toggled.connect(self.send_priorities)
+        self.priority_sensor.setEnabled(False); self.priority_weight.setEnabled(False)
+        for w in (self.use_priorities, self.priority_sensor, QLabel("Priority 1–4:"), self.priority_weight,
+                  self.button("Finish session", self.finish_session)): priority_row.addWidget(w)
+        layout.addLayout(priority_row)
+        self.rejection_reason = QLabel(""); self.rejection_reason.setWordWrap(True); layout.addWidget(self.rejection_reason)
+        self.coverage = QLabel("No current connection coverage"); self.coverage.setWordWrap(True); layout.addWidget(self.coverage)
         split = QSplitter()
         self.sensor_list = QListWidget(); self.sensor_list.setMaximumWidth(285)
         self.sensor_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
@@ -184,7 +219,7 @@ class MainWindow(QMainWindow):
         self.sensor_list.itemChanged.connect(self.select_sensors)
         self.sensor_list.model().rowsMoved.connect(self.select_sensors)
         split.addWidget(self.sensor_list)
-        self.dashboard = table(["Measurement", "Value", "Units", "State", "Rate", "Last success (UTC)", "ECU"])
+        self.dashboard = table(["Measurement", "Value", "Units", "State", "Rate", "Last success (UTC)", "ECU", "Evidence", "Actual interval", "Gap / age", "Priority"])
         split.addWidget(self.dashboard); split.setStretchFactor(1, 1)
         layout.addWidget(QLabel("Choose sensors with checkboxes; drag to reorder. Base units remain unchanged in recordings."))
         layout.addWidget(split, 1)
@@ -206,6 +241,20 @@ class MainWindow(QMainWindow):
         self.send("select", pids=[self.sensor_list.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self.sensor_list.count()) if self.sensor_list.item(i).checkState() == Qt.CheckState.Checked])
 
+    def select_priority(self, *args):
+        self.priority_weight.blockSignals(True)
+        self.priority_weight.setValue(self.priorities[self.priority_sensor.currentData()])
+        self.priority_weight.blockSignals(False)
+
+    def change_priority(self, weight):
+        self.priorities[self.priority_sensor.currentData()] = weight
+        self.send_priorities()
+
+    def send_priorities(self, *args):
+        enabled = self.use_priorities.isChecked()
+        self.priority_sensor.setEnabled(enabled); self.priority_weight.setEnabled(enabled)
+        self.send("priorities", enabled=enabled, weights=dict(self.priorities))
+
     def build_sessions(self):
         tab = QWidget(); layout = QVBoxLayout(tab); row = QHBoxLayout()
         for label, callback in [("Start Recording", lambda: self.send("record")), ("Stop Recording", lambda: self.send("record_stop")),
@@ -213,6 +262,8 @@ class MainWindow(QMainWindow):
                                 ("Open JSONL replay…", self.open_replay), ("Export CSV…", self.csv_export), ("Export JSONL…", self.jsonl_export)]:
             row.addWidget(self.button(label, callback))
         layout.addLayout(row)
+        instructions = QLabel("Before ignition OFF: Stop Recording and Stop polling, then Disconnect. Either Stop order is supported. Disconnect finalizes an open journal and SQLite session.")
+        instructions.setWordWrap(True); layout.addWidget(instructions)
         self.diagnostic_export = QCheckBox("Diagnostic support export: include unredacted adapter/port and identification bytes")
         layout.addWidget(self.diagnostic_export)
         layout.addWidget(QLabel("Vehicle: Opel Mokka B, 2022, 1.5 diesel. VIN is never queried. Adapter identifiers are redacted by default."))
@@ -298,7 +349,7 @@ class MainWindow(QMainWindow):
     def build_explorer(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
         layout.addWidget(QLabel("STANDARD_VERIFIED validates the published formula; it does not assert support or accuracy on your vehicle. No DPF decoder is registered."))
-        self.explorer = table(["Sensor", "Request", "Service / positive", "ECU", "Layout", "Formula", "Units", "Poll rate", "Verification", "Last value", "Last UTC"])
+        self.explorer = table(["Sensor", "Request", "Service / positive", "ECU", "Layout", "Formula", "Units", "Poll rate", "Verification", "Last value", "Last UTC", "State / evidence"])
         layout.addWidget(self.explorer)
         self.sensor_detail = QTextEdit(); self.sensor_detail.setReadOnly(True); self.sensor_detail.setMaximumHeight(230)
         layout.addWidget(self.sensor_detail)
@@ -438,35 +489,62 @@ class MainWindow(QMainWindow):
                    if self.sensor_list.item(i).checkState() == Qt.CheckState.Checked]
         self.dashboard.setRowCount(len(checked))
         now = time.monotonic()
+        weights = priority_weights([i.data(Qt.ItemDataRole.UserRole) for i in checked
+                                    if i.data(Qt.ItemDataRole.UserRole) in self.support.get(source, set())],
+                                   self.priorities if self.use_priorities.isChecked() else {})
+        current, states = 0, {}
         for index, item in enumerate(checked):
             pid = item.data(Qt.ItemDataRole.UserRole); sensor = self.registry[pid]
             reading = self.readings.get((source, pid))
+            key = source, pid
             state, value, unit, stamp, hz = "Unavailable", "—", sensor.unit, "—", "—"
+            evidence, interval, gap = "No evidence", "—", "—"
             if source in self.support:
                 availability = support_state(self.support[source], self.support_pages.get(source, set()), pid)
                 if availability == "unsupported": state = "Not supported"
                 elif availability == "unknown": state = "Support unknown"
-            if pid in self.sensor_errors and state != "Not supported": state = "Invalid / unavailable"
+            error = self.sensor_errors.get(key, "")
+            if error and state != "Not supported": state = "ECU rejected / unavailable" if "7F 01" in error else "Invalid / unavailable"
             if reading:
                 age = now - reading["received_at"]
-                threshold = max(5., len(self.worker.selected) / max(.25, self.rate.value()) * 2.5)
-                state = "Valid" if age <= threshold and (self.connected or self.mode == "REPLAY") else "Stale"
-                if reading.get("invalid"): state = "Invalid (last success shown)"
+                expected = nominal_interval(pid, weights, self.rate.value()) if pid in weights else 0
+                threshold = max(5., expected * 2.5)
+                replay = reading["mode"].startswith("REPLAY")
+                evidence = ("REPLAY · " if replay else "") + reading.get("source_kind", "UNKNOWN")
+                valid = (not replay and self.connected and self.polling_active and reading["mode"] == self.mode
+                         and pid in weights and age <= threshold and not reading.get("invalid")
+                         and not reading.get("stale_reason"))
+                state = "Recorded (offline)" if replay else "Valid" if valid else "Stale (last success)"
+                reason = reading.get("stale_reason") or error or (self.acquisition_reason if not replay and not self.polling_active else "")
+                if reason and not valid: state += " · " + reason
+                current += valid
                 converted, unit = convert(reading["value"], sensor.unit, self.units.isChecked())
-                value, stamp = f"{converted:.2f}", reading["timestamp"]
-                times = self.history.get((source, pid), [])
-                if len(times) > 1 and times[-1] > times[0]: hz = f"{(len(times)-1)/(times[-1]-times[0]):.2f} Hz"
-            update_row(self.dashboard, index, [sensor.name, value, unit, state, hz, stamp, source or "—"])
-            color = "#eabf75" if state == "Stale" else "#e89494" if "Invalid" in state else "#8cddd0" if state == "Valid" else "#91a0b0"
+                value, stamp = f"{converted:.2f}" + (" (last)" if not valid and not replay else ""), reading["timestamp"]
+                times = self.history.get(key, [])
+                deltas = [b - a for a, b in zip(times, list(times)[1:]) if b > a]
+                if deltas:
+                    interval = f"{sum(deltas)/len(deltas):.2f} s"
+                    hz = f"{len(deltas)/sum(deltas):.2f} Hz"
+                gap = (f"recorded max {max(deltas):.2f} s" if deltas else "recorded") if replay else f"age {max(0., age):.2f} s"
+                if deltas and not replay: gap += f" / max {max(deltas):.2f} s"
+            states[pid] = state + " / " + evidence
+            update_row(self.dashboard, index, [sensor.name, value, unit, state, hz, stamp, source or "—", evidence,
+                                              interval, gap, weights.get(pid, "—")])
+            self.dashboard.item(index, 3).setToolTip(error or self.acquisition_reason)
+            color = "#eabf75" if state.startswith("Stale") else "#e89494" if "Invalid" in state or "rejected" in state else "#8cddd0" if state == "Valid" else "#91a0b0"
             self.dashboard.item(index, 3).setForeground(QColor(color))
+        self.coverage.setText(f'ECU: {source or "—"} | selected supported: {len(weights)}/{len(checked)} | current: {current}/{len(weights)} | {self.acquisition_reason}')
+        self.banner.setText(self.mode + (" · recorded evidence, offline" if self.mode == "REPLAY" else " · polling" if self.polling_active else " · polling stopped; values stale"))
         if self.explorer.rowCount() == 0:
             for s in self.registry.values():
-                add_row(self.explorer, [s.name, f"01{s.pid:02X}", f'01 / {s.metadata["positive_response"]}', "—", s.metadata["layout"], s.metadata["formula"], s.unit, "—", s.metadata["verification"], "—", "—"])
+                add_row(self.explorer, [s.name, f"01{s.pid:02X}", f'01 / {s.metadata["positive_response"]}', "—", s.metadata["layout"], s.metadata["formula"], s.unit, "—", s.metadata["verification"], "—", "—", "Unavailable"])
         for row, sensor in enumerate(self.registry.values()):
             reading = self.readings.get((source, sensor.pid))
             verification = "UNSUPPORTED" if source in self.support and support_state(self.support[source], self.support_pages.get(source, set()), sensor.pid) == "unsupported" else sensor.metadata["verification"]
-            for col, val in [(3, source or "—"), (7, f"≤{self.rate.value()/max(1,len(self.worker.selected)):.2f} Hz nominal"),
-                             (8, verification), (9, f'{reading["value"]:.3f}' if reading else "—"), (10, reading["timestamp"] if reading else "—")]:
+            nominal = f"{nominal_interval(sensor.pid, weights, self.rate.value()):.2f} s nominal" if sensor.pid in weights else "Not scheduled"
+            for col, val in [(3, source or "—"), (7, nominal),
+                             (8, verification), (9, f'{reading["value"]:.3f}' if reading else "—"), (10, reading["timestamp"] if reading else "—"),
+                             (11, states.get(sensor.pid, "Not selected / last evidence only"))]:
                 self.explorer.item(row, col).setText(val)
 
     def drain(self):
@@ -475,11 +553,24 @@ class MainWindow(QMainWindow):
             try: kind, value = self.worker.events.get_nowait()
             except queue.Empty: break
             if kind == "notice": self.notice(value)
+            elif kind == "context":
+                self.context_id, self.mode = value["id"], value["mode"]
+                self.readings.clear(); self.history.clear(); self.sensor_errors.clear()
+                self.support.clear(); self.support_pages.clear()
+                self.ecu.clear(); self.ecu.addItem("Automatic first responding ECU", "")
+                self.rejection_reason.clear()
+                self.polling_active = False
+                self.connected = False
+                self.acquisition_reason = "Replay paused" if self.mode == "REPLAY" else "Opening connection"
+                self.requires_reconnect = False
+            elif kind == "acquisition":
+                self.polling_active = value["polling"] and not self.user_paused
+                self.acquisition_reason = value["reason"]
+                self.requires_reconnect = value["requires_reconnect"]
             elif kind == "connection":
                 self.mode = value["mode"]
                 self.connected = value["ecu"] == "Connected"
                 self.status.setText(f'Adapter: {value["adapter"]}   |   ECU: {value["ecu"]}   |   Protocol: {value["protocol"]}')
-                self.banner.setText(self.mode)
                 self.connect_button.setEnabled(value["adapter"] == "Disconnected" or value["ecu"] in {"Connected", "No verified ECU response", "Replay paused"})
             elif kind == "support":
                 self.support = value
@@ -491,24 +582,36 @@ class MainWindow(QMainWindow):
                 self.refresh_sessions()
             elif kind == "transaction":
                 record, readings = value
+                if self.context_id and record.get("context_id", self.context_id) != self.context_id: continue
                 self.request_count += 1; self.error_count += record["status"] != "OK"
                 if len(self.raw_records) == 500: self.raw_table.removeRow(0)
                 self.raw_records.append(record)
                 add_row(self.raw_table, [record["timestamp"], record["command"], record["status"], f'{record["latency_ms"]:.1f}',
-                    ', '.join(x["ecu"] or "headerless" for x in record["parsed"]),
+                    ', '.join(x["ecu"] or "headerless" for x in record["parsed"] + record.get("negative_responses", [])),
                     ' / '.join(x["data_hex"] for x in record["parsed"]), ', '.join(record["decoder"]), record["error"]])
                 for reading in readings:
                     source = reading["ecu"] or "headerless"
                     if self.ecu.findData(source) < 0: self.ecu.addItem(source, source)
                     if not self.source_key(): self.ecu.setCurrentIndex(self.ecu.findData(source))
                     key = source, reading["pid"]
-                    self.readings[key] = dict(reading, received_at=time.monotonic(), invalid=False)
-                    self.sensor_errors.pop(reading["pid"], None)
-                    self.history.setdefault(key, deque(maxlen=20)).append(time.monotonic())
-                    if record.get("replay"): self.banner.setText(reading["mode"])
+                    replay = record.get("replay", False)
+                    sent_at = reading["monotonic_ns"] / 1e9
+                    self.readings[key] = dict(reading, received_at=time.monotonic() if replay else sent_at, invalid=False)
+                    self.sensor_errors.pop(key, None)
+                    self.history.setdefault(key, deque(maxlen=20)).append(sent_at)
+                for rejection in record.get("negative_responses", []):
+                    source = rejection["ecu"] or "headerless"
+                    reason = f'{source}: {rejection["reason"]} (7F 01 {rejection["nrc"]})'
+                    self.rejection_reason.setText(("Recorded " if record.get("replay") else "ECU rejection: ") + reason + "; not a transport timeout. Ignition state is not confirmed.")
+                    if record.get("pid"):
+                        pid = int(record["pid"], 16)
+                        self.sensor_errors[source, pid] = reason
+                        for (ecu, p), reading in self.readings.items():
+                            if ecu == source and (p == pid or rejection["nrc"] == "22"):
+                                reading["stale_reason"] = reason
                 if record["status"] in {"INVALID", "TRANSPORT_ERROR"} and record.get("pid"):
                     pid = int(record["pid"], 16)
-                    self.sensor_errors[pid] = record["error"]
+                    for source in self.support: self.sensor_errors[source, pid] = record["error"]
                     for (source, p), reading in self.readings.items():
                         if p == pid: reading["invalid"] = True
         self.update_measurements()
@@ -516,6 +619,7 @@ class MainWindow(QMainWindow):
         self.stats.setText(f'Recording: {self.recording_id[:12] if self.recording_id else "off"}  {duration:.1f}s   |   Requests: {self.request_count}   |   Errors: {self.error_count}   |   Dropped UI previews: {self.worker.dropped}')
         self.record_button.setEnabled(not self.recording_id)
         self.record_stop_button.setEnabled(bool(self.recording_id))
+        self.start_button.setEnabled(self.connected and not self.polling_active and not self.requires_reconnect)
 
     def closeEvent(self, event):
         self.timer.stop()
