@@ -15,6 +15,7 @@ from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.protocols import BITMAP_PIDS, supported_pids
 from mokka_ecu_lab.protocols.isotp import parse_reply
 from mokka_ecu_lab.sensors import load_registry
+from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, layout_evidence
 
 
 def export_research_bundle(root: Path, session_id: str, target: Path):
@@ -34,6 +35,7 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
         export_csv(root,session_id,folder/'measurements.csv')
         support, pages = {}, {}
         errors, versions, decoder_versions, identifiers, markers = [], set(), set(), set(), []
+        raw_observations=[]
         stats = defaultdict(lambda:dict(requests=0,responses=0,decoded_samples=0,times=[],timestamps=[]))
         sent_requests=0; transaction_count=0
         for line in raw_path.open(encoding='utf-8'):
@@ -52,6 +54,17 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
                 pages={e:set(p) for e,p in record.get('support_pages',{}).items()}
             if pid is not None:
                 result=parse_reply(base64.b64decode(record['raw_b64']),pid,record.get('command',''))
+                if pid in RAW_ONLY_PIDS:
+                    for reply in result.responses:
+                        if reply.negative_code is not None: continue
+                        retained=next((s for s in record.get('raw_samples',[]) if s.get('ecu')==reply.header),{})
+                        raw_observations.append(dict(request=record['command'],ecu=reply.header,
+                            timestamp=record['timestamp'],monotonic_ns=record['monotonic_ns'],
+                            source_kind=record.get('source_kind','UNKNOWN'),mode=record.get('mode','UNKNOWN'),
+                            raw_only=bool(record.get('raw_only')),framing_valid=True,
+                            payload_hex=reply.data.hex(' ').upper(),**layout_evidence(pid,reply.data),
+                            context_readings=retained.get('context_readings',{}),
+                            context_state='RECORDED_NON_SIMULTANEOUS' if retained.get('context_readings') else 'UNAVAILABLE'))
                 if pid in BITMAP_PIDS:
                     for reply in result.responses:
                         ecu=reply.header or 'headerless'
@@ -115,10 +128,13 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
                      decoder_versions=sorted(decoder_versions) or ([evidence['decoder_version']] if evidence.get('decoder_version') else []),
                      export_application_version=__version__,export_decoder_version=DECODER_VERSION,
                      capture_weights=evidence.get('capture_weights',{}),vehicle_verified=False,
+                     capture_raw_pids=evidence.get('capture_raw_pids',[]),
+                     raw_only_samples=sum(r['raw_only'] for r in raw_observations),
                      redaction='Default application export; adapter/port/identity bytes and personal metadata excluded')
         for name,data in [('discovery-report.json',report),('session-summary.json',summary),
                           ('pid-support.json',summary_rows),('ecu-identifiers.json',sorted(identifiers)),
-                          ('polling-statistics.json',intervals),('errors.json',errors),('markers.json',markers)]:
+                          ('polling-statistics.json',intervals),('errors.json',errors),('markers.json',markers),
+                          ('raw-observations.json',raw_observations)]:
             (folder/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
         if not summary['application_versions']: warnings.append('Recording application version unavailable (legacy journal)')
         if not summary['decoder_versions']: warnings.append('Recording decoder version unavailable (legacy journal)')
