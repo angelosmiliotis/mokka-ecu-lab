@@ -20,9 +20,10 @@ def test_simulator_scenarios(scenario):
         try:
             raw = sim.exchange('010C',stop)
             replies = parse_obd(raw,12)
+            errors += any(r.negative_code is not None for r in replies)
             multiple |= len(replies) == 2
         except (TransportError, ValueError): errors += 1
-    if scenario in {'Adapter timeout','ECU timeout','Malformed response','Disconnection','Incomplete reply'}: assert errors
+    if scenario in {'Adapter timeout','ECU timeout','Malformed response','Disconnection','Incomplete reply','Conditions Not Correct'}: assert errors
     if scenario == 'Multiple ECUs': assert multiple
 
 def await_event(worker, kind, predicate=lambda x: True, timeout=8):
