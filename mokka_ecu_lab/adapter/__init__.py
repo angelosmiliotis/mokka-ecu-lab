@@ -209,7 +209,7 @@ class AcquisitionWorker(threading.Thread):
             sample['layout_status'] = 'NO_SUPPORT_EVIDENCE'
             return sample
         if raw_only and pid in RAW_ONLY_PIDS:
-            sample.update(raw_only=True,acquisition='RAW ONLY / DECODER UNVERIFIED',
+            sample.update(raw_only=True,acquisition='RAW ONLY / '+sample['layout_status'],
                           numeric_decoder_enabled=False)
             return sample
         try: sample['fields'] = STANDARD_DIESEL[pid].decode(reply.data)
