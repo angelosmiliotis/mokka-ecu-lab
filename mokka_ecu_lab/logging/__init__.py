@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,22 @@ class Recorder:
             self.db.commit()
             self.db.close()
 
+    def evidence(self, data):
+        """Local session metadata; no request and no change to original journal."""
+        metadata = json.loads(self.db.execute('SELECT metadata FROM sessions WHERE id=?',(self.id,)).fetchone()[0])
+        metadata['capture_evidence'] = data
+        self.db.execute('UPDATE sessions SET metadata=? WHERE id=?',(json.dumps(metadata),self.id))
+        self.db.commit()
+
+    def marker(self, event, note='', mode='Unknown', timestamp=None, monotonic_ns=None):
+        if event not in {'Journey Start','Journey End','Note'}: raise ValueError('Unknown marker')
+        record=dict(schema_version=2,record_type='marker',id=uuid.uuid4().hex,session_id=self.id,
+                    timestamp=timestamp or utc_now(),monotonic_ns=monotonic_ns or time.monotonic_ns(),event=event,
+                    note=str(note)[:512] if event=='Note' else '',mode=mode)
+        self.file.write(json.dumps(record,ensure_ascii=False)+'\n')
+        self.file.flush(); os.fsync(self.file.fileno())
+        return record
+
 def list_sessions(root: Path) -> list[dict]:
     db = connect_database(root)
     db.row_factory = sqlite3.Row
@@ -94,6 +111,10 @@ def export_jsonl(source: Path, target: Path, diagnostic_support=False):
                 if not line.endswith('\n'): continue
                 raise ValueError("Malformed complete journal line; export stopped") from exc
             if not diagnostic_support:
+                if record.get('record_type')=='marker' and record.get('event')=='Note':
+                    record['note']='REDACTED_USER_NOTE'; record['note_redacted']=True
+                for key in ('VIN','vin','vehicle_identification_number','owner','personal_identifiers','metadata'):
+                    record.pop(key,None)
                 record["adapter"] = "REDACTED"
                 record["port"] = "REDACTED"
                 # Identification replies themselves may contain a device serial/name.
