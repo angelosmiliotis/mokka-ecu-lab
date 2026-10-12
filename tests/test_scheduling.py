@@ -25,7 +25,7 @@ def test_schedule_changes_drop_unselected_pids_and_bound_weights():
 
 def test_read_only_policy_is_unchanged_by_scheduler():
     assert LIVE_PIDS == {4, 5, 11, 12, 13, 15, 16, 66, 70, 92}
-    assert BITMAP_PIDS == {0, 32, 64}
+    assert BITMAP_PIDS == set(range(0,256,32))
     assert ADAPTER_COMMANDS == {"ATI", "STI", "ATE0", "ATL0", "ATS1", "ATH1", "ATM0", "ATTP0", "ATST64", "ATDP", "ATDPN"}
     for command in ("04", "0902", "22F190", "2701", "2E1234", "3101FF00", "ATSH7E0", "0122"):
         with pytest.raises(UnsafeRequest): validate_command(command, set(range(256)))
