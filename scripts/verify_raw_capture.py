@@ -16,7 +16,7 @@ from mokka_ecu_lab.logging import list_sessions
 from mokka_ecu_lab import __version__
 
 parser=argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--output-dir',type=Path,default=Path('release/v0.2.2-validation'))
+parser.add_argument('--output-dir',type=Path,default=Path('release/v0.2.4-validation'))
 args=parser.parse_args(); output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
 app=QApplication([]); window=MainWindow(output/'data')
 window.scenario.setCurrentText('Diesel alternative layouts'); window.tabs.setCurrentIndex(6); window.show()
@@ -98,7 +98,27 @@ def tick():
             view.tabs.setCurrentIndex(1); view.evidence_tabs.setCurrentIndex(2); app.processEvents()
             assert view.chart.series() and view.group.count()>=1
             window.grab().save(str(output/'research-bytes.png'))
+            view.evidence_tabs.setCurrentIndex(0)
+            row=next(i for i,r in enumerate(view.matrix_rows) if r['pid']=='85')
+            view.matrix.selectRow(row); view.matrix.scrollToItem(view.matrix.item(row,0)); app.processEvents()
+            assert view.matrix.item(row,1).text()=='SUPPORTED'
+            assert view.matrix.item(row,2).text()=='UNKNOWN'
+            for r in view.matrix_rows:
+                if not r['positive_response_count']: assert r['observation_state']=='NOT_OBSERVED'
+                if r['pid'] in {'60','80'}:
+                    assert r['layout_state']=='BITMAP_VALID_UNANCHORED' and r['layout_mismatches']==0
+            window.grab().save(str(output/'research-compatibility.png'))
+            view.evidence_tabs.setCurrentIndex(3); app.processEvents()
+            assert 'at recorded time' in view.scr_detail.toPlainText() and 'Historical evidence — not current fault' in view.scr_detail.toPlainText()
+            window.grab().save(str(output/'research-scr-summary.png'))
+            try:
+                QFileDialog.getSaveFileName=lambda *a,**k:(str(output/'ui-private-report.html'),'HTML'); view.save_button.click()
+            finally: QFileDialog.getSaveFileName=original_dialog
+            assert (output/'ui-private-report.json').exists() and (output/'ui-private-report.html').exists()
+            assert 'payload_hex' not in (output/'ui-private-report.html').read_text(encoding='utf-8')
             result.update(research_groups=view.group.count(),independent_verification=False,offline_research=True)
+            result.update(recorded_raw_support_separate=True,unobserved_pid_states_correct=True,bitmap_unanchored_not_layout_error=True,
+                scr_human_summary=True,private_html_json_export=True,html_external_resources=False)
             timer.stop(); window.close()
     except Exception as exc:
         result['error']=str(exc); timer.stop(); window.close()
