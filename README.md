@@ -1,6 +1,6 @@
 # Mokka ECU Lab
 
-Version 0.2.0 adds ECU-specific standard diesel discovery, ISO-TP reception, documented field decoders and a Discovery tab with evidence exports. All v0.1.1 fixes remain. New vehicle support is unverified; development uses simulation only. See [research and consolidated validation steps](research/v0.2-discovery.md).
+Version 0.2.1 adds a staged Drive Capture preset with ECU-specific filtering, manual PID choices, weighted monitoring, a focused dashboard, local journey markers and one-click redacted Research Bundle export. See [the operator guide and exact button order](DRIVE_CAPTURE.md). All v0.2.0 discovery/ISO-TP features and v0.1.1 fixes remain. New vehicle support is unverified; implementation checks use simulation only.
 
 A locally runnable Windows 11 desktop application for read-only OBD-II acquisition, recording, replay and offline decoder research. Python 3.12+ / PySide6 / pyserial. No account, telemetry or automatic connection. The first delivery includes ten generic Mode 01 sensors. Manufacturer-specific live requests are intentionally absent.
 
@@ -69,6 +69,7 @@ Baud choices 115200/38400/9600 are host settings; no automatic baud scan or pers
 .\.venv\Scripts\python.exe scripts\generate_demo.py
 .\.venv\Scripts\python.exe scripts\verify_ui.py
 .\.venv\Scripts\python.exe scripts\verify_discovery.py
+.\.venv\Scripts\python.exe scripts\verify_capture.py
 .\.venv\Scripts\python.exe -m mokka_ecu_lab --smoke-test --data-dir samples\ui-smoke
 ```
 

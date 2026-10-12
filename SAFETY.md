@@ -1,5 +1,7 @@
 # Read-only safety boundary
 
+v0.2.1 Drive Capture uses exactly the v0.2.0 request permissions below. Preset selection and manual checkbox edits do not send requests. Explicit Start rechecks ECU-specific support and valid advanced fields. OEM candidates stay offline. Journey markers are local journal events with no ECU command. Research Bundle export is local, requires a closed session, redacts device/personal metadata and free-text notes by default, and preserves original journals. See [DRIVE_CAPTURE.md](DRIVE_CAPTURE.md).
+
 Version 0.2 allows only SAE Mode 01 reads from fixed code-owned sets. `SafeTransport.exchange` validates at the last public boundary before serial writes. It rejects carriage returns, whitespace, command chaining, extra bytes, empty repeats, arbitrary AT commands and all other diagnostic services. Sensor JSON cannot broaden this boundary.
 
 ## Exact live policy

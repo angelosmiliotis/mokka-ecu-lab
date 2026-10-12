@@ -1,5 +1,13 @@
 # Testing and vehicle validation
 
+## Version 0.2.1 Drive Capture
+
+**260 tests passed** on 12 October 2026. The native Windows UI completed discovery, all nine Drive Capture choices, seven focused readings, three journey markers, finalization and an eleven-file research ZIP with verified checksums and unchanged original bytes. No monitoring errors occurred in the synthetic run. Physical vehicle validation remains pending.
+
+Capture regressions cover pure no-send preset planning, strict per-ECU support, unknown/missing/invalid/unsupported fields, manual selection/deselection, empty-selection Stop, reuse of weighted scheduling without starvation, measured aggregate wire cap, recording continuity and replay without initialization bitmaps. Bundle checks cover closed-session gating, original preservation, redaction, ZIP file hashes, stored-session isolation from later connections, observed sample counts/intervals and declared missing legacy versions. Marker tests cover no transport, durable storage, default note redaction, offline replay and exactly-once flushing when Stop cancels an in-flight receive. GUI checks include explicit activation, no preset sends, focused unavailable values, immediate staleness and new-context clearing.
+
+`scripts/verify_capture.py` drives the native Windows Simulation UI through the full operator workflow, markers and GUI bundle action. It checks the same recording across discovery/monitoring, all nine preferred selections, seven focused readings, clean finalization, eleven ZIP files, checksums and unchanged original journal. Packaged simulation startup is checked separately. Results: `samples/v0.2.1-validation.json`. These are software results only; the [operator checklist](DRIVE_CAPTURE.md) describes the pending consolidated vehicle session.
+
 ## Version 0.2.0 offline validation
 
 **240 tests passed** on 12 October 2026. New coverage includes per-ECU continuation through A0 and closed/unknown chains, explicit Discovery allowlists and prohibited OEM/session/header commands, classic CAN first/consecutive frames up to the 4095-byte bound, sequence wrap, padding, DLC/compact/29-bit formats, segmented headerless output, malformed/duplicate/truncated streams and independent ECU survival. All twelve diesel layouts have positive and wrong-length fixtures; field flags, signed delta pressure, 85 tank level, 8B status/type and trigger, units and 88 reserved/current/history checks are covered.

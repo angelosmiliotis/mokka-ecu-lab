@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.1 — 2026-10-12
+
+- Drive Capture preset prepares preferred supported choices without transmitting; explicit Start uses the existing weighted scheduler and unchanged 4 application requests/s cap. Manual advanced PID choices require ECU-specific discovery and valid fields.
+- Recording stays open across discovery/monitoring. Stored session evidence and recorded support make exports/replay independent of later connections.
+- Export Research Bundle creates a local redacted ZIP with raw, CSV, discovery/support/ECU reports, observed counts/intervals, errors, session/version metadata, markers, manifest and SHA-256 checksums.
+- Optional focused dashboard shows seven readings with current/stale/unavailable evidence. Journey Start/End/Note markers are local only; default note text is redacted and queued markers survive canceled receive finalization.
+- Original read-only allowlists, OEM exclusions and failure/reconnect rules remain. No physical vehicle validation. See DRIVE_CAPTURE.md for the operator workflow.
+
 ## 0.2.0 — 2026-10-12
 
 - Explicit ECU-specific standard diesel discovery and advertised bitmap continuation through E0; separate optional monitoring shares the 4 application requests/s cap.

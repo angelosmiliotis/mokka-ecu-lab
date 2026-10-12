@@ -1,5 +1,9 @@
 # Architecture
 
+## v0.2.1 capture and bundles
+
+`capture.py` builds a pure filtered plan; preparing a preset does not touch the worker or transport. Explicit activation revalidates support/fields and feeds the existing PollScheduler. The original basic selection/priorities remain independent. Advanced requests retain their existing scoped transport permissions. Session metadata stores evidence snapshots; advanced raw transactions also retain observed bitmap support for initialization-free replay. `logging/bundle.py` exports a closed selected session locally with atomic ZIP replacement and checksums, independently of current UI state. Marker records extend the journal with a separate record_type, do not increment request/error counts, and are replayed without a transport. A bounded command queue and session-bound pending marker map prevent duplication or attachment to another session during Stop/finalization. Export runs after recording stops; large exports may briefly occupy the UI thread.
+
 ## v0.2 Discovery extension
 
 `protocols/isotp.py` returns independently validated responses plus per-source errors; state is local to one reply. `sensors/diesel.py` owns strict historical standard layouts and offline candidates. `discovery.py` builds evidence reports without a transmit API. The worker follows ECU-specific continuation and temporarily enables fixed standard Discovery scope on SafeTransport; monitoring shares PollScheduler with basic sensors. Original bytes and advanced fields use the existing recorder, without journal migration. Replay recomputes fields using recorded support and never creates a transport. The sixth tab shows metadata/export while the dashboard remains ten sensors. See [research](research/v0.2-discovery.md) for revision and vehicle boundaries.
