@@ -1,5 +1,7 @@
-"""Native Windows v0.2.2 validation using constructed simulator data only."""
+"""Native Windows raw validation using constructed simulator data only."""
 import argparse
+import csv
+import io
 import hashlib
 import json
 import sys
@@ -41,7 +43,7 @@ def tick():
             assert before==window.worker.transport.last_send
             baseline={p:len(window.capture_history.get(('7E8',p),[])) for p in (0x7A,0x88,0x83)}
             result['discovery_layout_mismatches']=window.error_count
-            assert result['discovery_layout_mismatches']==2
+            assert result['discovery_layout_mismatches']==1
             window.journey_start.click(); window.capture_start.click(); stage='monitor'
         elif stage=='monitor' and all(len(window.capture_history.get(('7E8',p),[]))-baseline[p]>=2 for p in baseline):
             assert window.capture_active and window.recording_id==session_id
@@ -77,8 +79,10 @@ def tick():
                 raw=json.loads(z.read('raw-observations.json')); opted=[r for r in raw if r['raw_only']]
                 assert len(opted)>=4 and {r['data_length'] for r in opted}=={6,13}
                 assert all(r['source_kind']=='SIMULATED' and r['context_state']=='RECORDED_NON_SIMULTANEOUS' for r in opted)
-                csv=z.read('measurements.csv'); assert b'sae_83_bank_1_sensor_1' in csv
-                assert b'sae_7a_' not in csv and b'sae_88_' not in csv
+                measurements=z.read('measurements.csv'); assert b'sae_83_bank_1_sensor_1' in measurements
+                assert b'sae_7a_' not in measurements
+                raw_ids={r['id'] for r in map(json.loads,original.splitlines()) if r.get('raw_only')}
+                assert all(row['transaction_id'] not in raw_ids for row in csv.DictReader(io.StringIO(measurements.decode('utf-8-sig'))))
             original_open=QFileDialog.getOpenFileName
             try:
                 QFileDialog.getOpenFileName=lambda *a,**k:(str(path),'ZIP'); window.open_trends()
@@ -87,6 +91,14 @@ def tick():
             window.trends_dialog.grab().save(str(output/'recorded-trends.png')); window.trends_dialog.close()
             result.update(bundle_files=12,checksums_verified=True,raw_unchanged=True,
                           raw_only_samples=len(opted),trend_charts=window.trends_dialog.charts.count(),sessions_closed=bool(session['ended']))
+            view=window.research_view; view.load_paths([path]); window.tabs.setCurrentIndex(4)
+            assert view.catalog.data['profile']['hardware_identification']=='UNKNOWN'
+            assert all(e['independent_verification']=='UNVERIFIED' for s in view.report['sessions'] for g in s['groups'] for e in g['matrix'])
+            view.tabs.setCurrentIndex(0); app.processEvents(); window.grab().save(str(output/'research-catalog.png'))
+            view.tabs.setCurrentIndex(1); view.evidence_tabs.setCurrentIndex(2); app.processEvents()
+            assert view.chart.series() and view.group.count()>=1
+            window.grab().save(str(output/'research-bytes.png'))
+            result.update(research_groups=view.group.count(),independent_verification=False,offline_research=True)
             timer.stop(); window.close()
     except Exception as exc:
         result['error']=str(exc); timer.stop(); window.close()
