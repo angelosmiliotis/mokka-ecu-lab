@@ -17,6 +17,8 @@ from mokka_ecu_lab.protocols.isotp import parse_reply
 from mokka_ecu_lab.sensors import load_registry
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 from mokka_ecu_lab.capture import DECODER_VERSION
+from mokka_ecu_lab import __version__
+from .summary import observe_summary,scr_summary
 
 MAX_MEMBER = 64 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
@@ -33,6 +35,111 @@ REQUIREMENTS = [
     '0188 documented decoding is not independent vehicle verification; compare current state and all block counters with an independent diagnostic source.',
     'Identify hardware/software/calibration only from independently known records; no new identification request or VIN lookup is authorized.',
     'Correlation, matching length and shared ECU/manufacturer names do not prove a decoder or proprietary DID compatibility.']
+
+
+def observation_state(source, count):
+    if not count: return 'NOT_OBSERVED'
+    return {'ECU_READING':'VEHICLE_OBSERVED','SIMULATED':'SIMULATED_OBSERVED'}.get(source,'UNKNOWN_SOURCE_OBSERVED')
+
+
+def matrix_entry(pid):
+    return dict(pid=f'{pid:02X}',request=f'01{pid:02X}',valid_framing=0,invalid_framing=0,
+        negative_responses=0,positive_response_count=0,layout_mismatches=0,
+        lengths=Counter(),field_states={},support_flags=Counter(),byte_changes=Counter(),
+        semantic_warnings=[],bitmap_evidence_states=Counter(),status='UNVERIFIED_LAYOUT')
+
+
+class BitmapEvidence:
+    """Ordered wire evidence only. Conflicting pages quarantine their descendants."""
+    def __init__(self):
+        self.seen={}; self.accepted={}; self.conflicts=set(); self.problems=[]
+
+    def invalidate(self, base):
+        self.conflicts.add(base)
+        self.accepted={p:v for p,v in self.accepted.items() if p<base}
+
+    def observe(self, pid, payload):
+        if len(payload)!=4: return 'BITMAP_INVALID_LENGTH'
+        prior=self.seen.setdefault(pid,set()); prior.add(payload)
+        if len(prior)>1:
+            self.invalidate(pid); self.problems.append(f'01{pid:02X}: conflicting original bitmap values')
+        if any(p<=pid for p in self.conflicts): return 'BITMAP_CHAIN_CONFLICT'
+        if pid:
+            parent=pid-32
+            if parent not in self.accepted: return 'BITMAP_VALID_UNANCHORED'
+            if pid not in supported_pids(self.accepted[parent],parent):
+                self.invalidate(parent)
+                self.problems.append(f'01{pid:02X}: positive page conflicts with parent continuation bit')
+                return 'BITMAP_CHAIN_CONFLICT'
+        self.accepted[pid]=payload
+        return 'BITMAP_VALID_ANCHORED'
+
+    def support(self, pid):
+        pages=set(self.accepted)
+        bits=set().union(*(supported_pids(v,p) for p,v in self.accepted.items()))
+        return support_state(bits,pages,pid).upper()
+
+
+def recorded_snapshots(members, summary):
+    """Checksum-verified stored snapshots; never original bitmap authority."""
+    snapshots=[]
+    for filename in ('pid-support.json','discovery-report.json'):
+        content=json.loads(members.get(filename,b'[]' if filename=='pid-support.json' else b'{}'))
+        if filename=='discovery-report.json':
+            if not isinstance(content,dict): raise ValueError('Invalid Discovery snapshot')
+            rows=content.get('standard',[]); mode=content.get('mode') or summary.get('mode')
+        else: rows=content; mode=summary.get('mode')
+        if not isinstance(rows,list): raise ValueError('Invalid support snapshot')
+        for row in rows:
+            if not isinstance(row,dict): raise ValueError('Invalid support snapshot row')
+            ecu,pid,state=(row.get(k) for k in ('ecu','pid','support'))
+            if not all(isinstance(v,str) for v in (ecu,pid,state)): continue
+            try: number=int(pid[2:] if len(pid)==4 and pid.startswith('01') else pid,16)
+            except ValueError: continue
+            if not 0<=number<=255: continue
+            snapshots.append(dict(ecu=ecu,pid=number,state=state.upper() if state.upper() in
+                {'SUPPORTED','UNSUPPORTED','UNKNOWN'} else 'UNKNOWN',origin=filename,
+                mode=row.get('mode') or mode,source_kind=row.get('source_kind')))
+    return snapshots
+
+
+def complete_row(e, g, bitmap, snapshots, ambiguous=False):
+    """Additive schema v1 fields; the legacy support key remains raw-only."""
+    pid=int(e['pid'],16); state=bitmap.support(pid)
+    recorded={r['state'] for r in snapshots}; known=recorded-{'UNKNOWN'}
+    snapshot_state='CONFLICT' if len(known)>1 else next(iter(known),'UNKNOWN')
+    notes=[]; disagreements=[]
+    if ambiguous: notes.append('Recorded snapshot source scope is ambiguous; it cannot be assigned to this source group.')
+    if state=='UNKNOWN': notes.append('Raw bitmap support UNKNOWN: the ordered predecessor/continuation chain is missing or conflicting.')
+    if recorded: notes.append(f'Recorded Discovery snapshot: {snapshot_state}; checksum-verified stored evidence, not independently raw-verified.')
+    else: notes.append('No applicable recorded Discovery support snapshot.')
+    if snapshot_state=='CONFLICT': disagreements.append('Conflicting recorded Discovery snapshots')
+    if state!='UNKNOWN' and known and known!={state}: disagreements.append('Raw bitmap and recorded support disagree')
+    if state=='UNSUPPORTED' and e['positive_response_count']: disagreements.append('Positive response despite unsupported raw bitmap')
+    notes.extend(disagreements)
+    count=e['positive_response_count']; observed=observation_state(g['source_kind'],count)
+    if not count: notes.append('No complete positive response for this PID; the session source does not establish PID observation.')
+    if snapshot_state=='UNSUPPORTED': notes.append('Snapshot UNSUPPORTED refers to this standard PID; an OEM equivalent is not ruled out.')
+    bitmap_states=e['bitmap_evidence_states']
+    if pid in BITMAP_PIDS:
+        if 'BITMAP_CHAIN_CONFLICT' in bitmap_states or any(p<=pid for p in bitmap.conflicts): layout='BITMAP_CHAIN_CONFLICT'
+        elif len(bitmap_states)>1: layout='BITMAP_MIXED_EVIDENCE'
+        else: layout=next(iter(bitmap_states),'NO_POSITIVE_RESPONSE')
+        if 'BITMAP_VALID_UNANCHORED' in bitmap_states: notes.append('MISSING_PREDECESSOR_EVIDENCE: four-byte bitmap is valid; its bits cannot infer support.')
+        e['status']='BITMAP_EVIDENCE'
+    else:
+        layout='UNVERIFIED_LAYOUT' if e['layout_mismatches'] else 'DOCUMENTED_LAYOUT' if count else 'NO_POSITIVE_RESPONSE'
+        if e['layout_mismatches']: e['status']='UNVERIFIED_LAYOUT'
+    framing='MIXED_FRAMING' if e['invalid_framing'] and e['valid_framing'] else 'INVALID_FRAMING' if e['invalid_framing'] else 'VALID_FRAMING' if e['valid_framing'] else 'NO_RESPONSE'
+    return dict(e,support=state,raw_bitmap_support=state,recorded_support=sorted(recorded),
+        recorded_discovery_support=snapshot_state,recorded_support_provenance=sorted({r['origin'] for r in snapshots}),
+        recorded_support_kind='RECORDED_SNAPSHOT',recorded_support_raw_verified=False,
+        observation_state=observed,vehicle_evidence=observed,layout_state=layout,frame_validity=framing,
+        definition_state='STANDARD_DOCUMENTED' if pid in STANDARD_DIESEL or pid in load_registry() else 'BITMAP_DEFINITION' if pid in BITMAP_PIDS else 'UNAVAILABLE',
+        evidence_explanation=' '.join(notes),contradictions=disagreements,
+        lengths=dict(e['lengths']),support_flags=dict(e['support_flags']),byte_changes=dict(e['byte_changes']),
+        bitmap_evidence_states=dict(bitmap_states),field_states={f:dict(c) for f,c in e['field_states'].items()},
+        independent_verification='UNVERIFIED')
 
 
 def read_bundle(path):
@@ -80,8 +187,9 @@ def analyze_bundles(paths):
         groups = {}; missing = []; contradictions = []; transaction_errors = []
         summary = json.loads(members.get('session-summary.json',b'{}'))
         if not isinstance(summary,dict): raise ValueError('Invalid session summary')
+        snapshots=recorded_snapshots(members,summary)
         if 'discovery-report.json' not in members: missing.append('No recorded discovery snapshot')
-        if 'raw-observations.json' not in members: missing.append('Legacy bundle: no recorded raw/context component')
+        if 'raw-observations.json' not in members: missing.append('Legacy bundle: no raw-observations.json sidecar; the complete original raw journal is still analyzed.')
         records = []
         for index, line in enumerate(members['raw-redacted.jsonl'].decode('utf-8-sig').splitlines()):
             if index >= MAX_RECORDS: raise ValueError('Journal exceeds offline record limit')
@@ -116,14 +224,11 @@ def analyze_bundles(paths):
                 key = (ecu or 'UNKNOWN ECU',mode,source)
                 if key not in groups:
                     if len(groups)>=MAX_GROUPS: raise ValueError('Too many source groups in one bundle (128 maximum)')
-                    groups[key] = dict(ecu=key[0],mode=mode,source_kind=source,support=set(),pages=set(),
+                    groups[key] = dict(ecu=key[0],mode=mode,source_kind=source,bitmap=BitmapEvidence(),
                         matrix={},samples=[],cache={},last={},missing=[])
                 return groups[key]
             def entry(g):
-                return g['matrix'].setdefault(pid,dict(pid=f'{pid:02X}',request=command,
-                    valid_framing=0,invalid_framing=0,negative_responses=0,layout_mismatches=0,
-                    lengths=Counter(),field_states={},support_flags=Counter(),byte_changes=Counter(),
-                    semantic_warnings=[],status='UNVERIFIED_LAYOUT'))
+                return g['matrix'].setdefault(pid,matrix_entry(pid))
             for error in result.errors:
                 e = entry(group(error.get('ecu'))); e['invalid_framing'] += 1
             if not result.responses and not result.errors:
@@ -133,16 +238,15 @@ def analyze_bundles(paths):
                 e['valid_framing'] += 1
                 if reply.negative_code is not None:
                     e['negative_responses'] += 1; continue
-                payload = reply.data; e['lengths'][len(payload)] += 1
+                payload = reply.data; e['lengths'][len(payload)] += 1; e['positive_response_count'] += 1
                 prior = g['last'].get(pid)
                 if prior is not None:
                     for i in range(max(len(prior),len(payload))):
                         if prior[i:i+1] != payload[i:i+1]: e['byte_changes'][i] += 1
                 g['last'][pid] = payload
                 if pid in BITMAP_PIDS:
-                    if len(payload)==4 and (pid==0 or (pid in g['support'] and pid-32 in g['pages'])):
-                        g['support'].update(supported_pids(payload,pid)); g['pages'].add(pid)
-                    else: e['layout_mismatches'] += 1
+                    bitmap_state=g['bitmap'].observe(pid,payload); e['bitmap_evidence_states'][bitmap_state]+=1
+                    if bitmap_state=='BITMAP_INVALID_LENGTH': e['layout_mismatches'] += 1
                     continue
                 fields = []; decode_error = None
                 try:
@@ -155,6 +259,7 @@ def analyze_bundles(paths):
                         fields = [dict(sensor_id=sensor.id,value=value,unit=sensor.unit,state='AVAILABLE')]
                     else: decode_error = 'No code-owned decoder'
                 except ValueError as exc: decode_error = str(exc)
+                observe_summary(g,pid,record,fields,decode_error)
                 if decode_error: e['layout_mismatches'] += 1
                 else: e['status'] = 'STANDARD_DOCUMENTED'
                 ns = timestamp(record)
@@ -180,43 +285,35 @@ def analyze_bundles(paths):
                         decoder_error=decode_error,fields=fields,context=context,
                         vehicle_evidence='VEHICLE_OBSERVED' if source=='ECU_READING' else source,
                         independent_verification='UNVERIFIED',recorded_raw_only=bool(record.get('raw_only'))))
-        snapshots = json.loads(members.get('pid-support.json',b'[]'))
-        if not isinstance(snapshots,list): raise ValueError('Invalid support snapshot')
-        snapshot_support={}
-        for row in snapshots:
-            if not isinstance(row,dict): raise ValueError('Invalid support snapshot row')
-            ecu,pid,state=(row.get(k) for k in ('ecu','pid','support'))
-            if not all(isinstance(v,str) for v in (ecu,pid,state)): continue
-            snapshot_support.setdefault((ecu,pid),set()).add(state)
         output = []
         for key,g in sorted(groups.items()):
-            for pid in set(g['support']) | set(STANDARD_DIESEL):
-                g['matrix'].setdefault(pid,dict(pid=f'{pid:02X}',request=f'01{pid:02X}',valid_framing=0,invalid_framing=0,
-                    negative_responses=0,layout_mismatches=0,lengths=Counter(),field_states={},support_flags=Counter(),
-                    byte_changes=Counter(),semantic_warnings=[],status='UNVERIFIED_LAYOUT'))
+            bitmap=g['bitmap']; raw_pids=set().union(*(supported_pids(v,p) for p,v in bitmap.accepted.items()))
+            applicable=[]; ambiguous=set()
+            for row in snapshots:
+                if row['ecu']!=g['ecu']: continue
+                if row['mode'] and row['mode']!=g['mode'] or row['source_kind'] and row['source_kind']!=g['source_kind']: continue
+                if not row['mode'] and not row['source_kind'] and sum(k[0]==g['ecu'] for k in groups)>1:
+                    ambiguous.add(row['pid']); continue
+                applicable.append(row)
+            for pid in raw_pids | set(STANDARD_DIESEL) | set(registry) | {r['pid'] for r in applicable} | ambiguous:
+                g['matrix'].setdefault(pid,matrix_entry(pid))
             matrix = []
             for pid,e in sorted(g['matrix'].items()):
-                state = support_state(g['support'],g['pages'],pid).upper()
-                recorded = snapshot_support.get((g['ecu'],f'{pid:02X}'),set())
-                if recorded and state != 'UNKNOWN' and recorded != {state}:
-                    contradictions.append(f'{g["ecu"]} 01{pid:02X}: raw bitmap and recorded support disagree')
-                if state == 'UNSUPPORTED' and e['lengths']:
-                    contradictions.append(f'{g["ecu"]} 01{pid:02X}: positive response despite unsupported bitmap')
-                if e['layout_mismatches']: e['status']='UNVERIFIED_LAYOUT'
-                matrix.append(dict(e,support=state,recorded_support=sorted(s for s in recorded if s),
-                    lengths=dict(e['lengths']),support_flags=dict(e['support_flags']),byte_changes=dict(e['byte_changes']),
-                    field_states={f:dict(c) for f,c in e['field_states'].items()},
-                    vehicle_evidence='VEHICLE_OBSERVED' if g['source_kind']=='ECU_READING' and e['lengths'] else g['source_kind'],
-                    independent_verification='UNVERIFIED'))
-            if not g['pages']: g['missing'].append('No original bitmap evidence in this source group; snapshot support is not inferred')
-            output.append(dict(ecu=g['ecu'],mode=g['mode'],source_kind=g['source_kind'],matrix=matrix,
+                row=complete_row(e,g,bitmap,[r for r in applicable if r['pid']==pid],pid in ambiguous)
+                contradictions.extend(f'{g["ecu"]} · {g["mode"]} · {g["source_kind"]} {row["request"]}: {c}' for c in row['contradictions'])
+                matrix.append(row)
+            contradictions.extend(f'{g["ecu"]} · {g["mode"]} · {g["source_kind"]}: {p}' for p in bitmap.problems)
+            if not bitmap.accepted: g['missing'].append('No anchored original bitmap chain in this source group; recorded snapshot remains separate.')
+            result_group=dict(ecu=g['ecu'],mode=g['mode'],source_kind=g['source_kind'],matrix=matrix,
                 samples=g['samples'],preview_limit=MAX_PREVIEW,preview_truncated=sum(sum(e['lengths'].values()) for p,e in g['matrix'].items() if p in {0x7A,0x88})>MAX_PREVIEW,
-                missing_evidence=sorted(set(g['missing']))))
+                missing_evidence=sorted(set(g['missing'])))
+            result_group['scr_summary']=scr_summary(dict(g,matrix=matrix))
+            output.append(result_group)
         sessions.append(dict(evidence_id=identity,checksum_verified=True,recorded_decoder_versions=summary.get('decoder_versions',[]),
             groups=output,transactions=len(records),missing_evidence=missing,
             contradictions=sorted(set(contradictions)),transaction_errors=transaction_errors,
             note='Offline re-decoding uses current definitions; original CSV/journal and historical decoder versions are unchanged.'))
-    return dict(schema_version=1,decoder_version=DECODER_VERSION,sessions=sessions,cloud_upload=False,
+    return dict(schema_version=1,analysis_revision=2,analyzer_version=__version__,decoder_version=DECODER_VERSION,sessions=sessions,cloud_upload=False,
         verification_requirements=REQUIREMENTS,
         limitations='Private local evidence. Separate session/ECU/mode/source groups; cached context is asynchronous with age. Correlation never establishes a decoder. No automatic confidence promotion.')
 
@@ -225,11 +322,12 @@ def save_analysis(report,path,inputs=()):
     target=Path(path).resolve()
     if target.suffix.lower()!='.json' or target in {Path(p).resolve() for p in inputs}:
         raise ValueError('Choose a separate JSON analysis output; original input cannot be overwritten')
+    if target.exists(): raise ValueError('Choose a fresh JSON filename; saved analyses are never overwritten by default')
     target.parent.mkdir(parents=True,exist_ok=True)
     fd,temporary=tempfile.mkstemp(prefix='analysis-',suffix='.json',dir=target.parent)
     try:
         with os.fdopen(fd,'w',encoding='utf-8') as stream:
             json.dump(report,stream,ensure_ascii=False,indent=2);stream.write('\n')
-        os.replace(temporary,target)
+        os.rename(temporary,target)
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
