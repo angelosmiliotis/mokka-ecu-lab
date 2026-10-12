@@ -25,6 +25,9 @@ from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.adapter.scheduling import priority_weights, nominal_interval
 from mokka_ecu_lab.capture import capture_plan, manual_options, DRIVE_WEIGHTS
 from mokka_ecu_lab.logging.bundle import export_research_bundle
+from mokka_ecu_lab.layouts import RAW_ONLY_PIDS
+from mokka_ecu_lab.analysis.trends import load_trends
+from .trends import TrendsDialog
 
 STYLE = """
 QWidget { background: #121923; color: #e4eaf2; font-family: 'Segoe UI'; font-size: 13px; }
@@ -81,8 +84,10 @@ class MainWindow(QMainWindow):
         self.discovery_target = None
         self.capture_active = False
         self.capture_weights = {}
+        self.capture_raw_pids = set()
         self.capture_ecu = None
         self.capture_history = {}
+        self.warning_history = {}
         self.last_recording_id = None
         self.discovery_reason = 'No discovery started'
         self.raw_records = deque(maxlen=500)
@@ -288,6 +293,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
         self.bundle_button = self.button('Export Research Bundle',self.bundle_export)
         layout.addWidget(self.bundle_button)
+        layout.addWidget(self.button('Recorded trends from CSV / Research Bundle…',self.open_trends))
         instructions = QLabel("Before ignition OFF: Stop Recording and Stop polling, then Disconnect. Either Stop order is supported. Disconnect finalizes an open journal and SQLite session.")
         instructions.setWordWrap(True); layout.addWidget(instructions)
         self.diagnostic_export = QCheckBox("Diagnostic support export: include original adapter/port, identification bytes and marker notes")
@@ -315,6 +321,14 @@ class MainWindow(QMainWindow):
                 duration = (end - datetime.fromisoformat(s["started"])).total_seconds()
                 add_row(self.session_table, [s["id"][:12], s["started"], s["ended"] or "Open / interrupted", f"{duration:.1f} s", s["mode"], s["requests"], s["errors"]])
                 if previous and s["id"] == previous["id"]: self.session_table.selectRow(index)
+        except Exception as exc: self.notice(str(exc))
+
+    def open_trends(self):
+        path,_=QFileDialog.getOpenFileName(self,'Local recorded comparisons',str(self.root),'Recorded data (*.csv *.zip)')
+        if not path: return
+        try:
+            report=load_trends(path)
+            self.trends_dialog=TrendsDialog(report,self); self.trends_dialog.show()
         except Exception as exc: self.notice(str(exc))
 
     def current_session(self):
@@ -542,9 +556,23 @@ class MainWindow(QMainWindow):
         split=QSplitter()
         self.capture_list=QListWidget(); self.capture_list.setMaximumWidth(370); split.addWidget(self.capture_list)
         self.capture_table=table(['Measurement','Value','Units','State / evidence','Observed mean interval','Age / maximum gap','Weight'])
+        self.capture_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.capture_table.horizontalHeader().setStretchLastSection(False)
+        for col,width in enumerate([230,85,55,340,155,170,70]): self.capture_table.setColumnWidth(col,width)
+        split.setMinimumHeight(220)
         split.addWidget(self.capture_table); split.setStretchFactor(1,1); layout.addWidget(split,1)
         self.capture_focus=QCheckBox('Focused dashboard (at most seven readings)')
         layout.addWidget(self.capture_focus)
+        raw_row=QHBoxLayout()
+        self.capture_raw_checks={}
+        for pid in sorted(RAW_ONLY_PIDS):
+            check=QCheckBox(f'Opt in 01{pid:02X} RAW ONLY / DECODER UNVERIFIED · weight 1')
+            check.setEnabled(False); check.stateChanged.connect(self.update_capture)
+            self.capture_raw_checks[pid]=check; raw_row.addWidget(check)
+        layout.addLayout(raw_row)
+        self.capture_raw_detail=QTextEdit(); self.capture_raw_detail.setReadOnly(True)
+        self.capture_counter_note=QLabel()
+        self.capture_counter_note.setWordWrap(True); layout.addWidget(self.capture_counter_note)
         marker_row=QHBoxLayout()
         self.journey_start=self.button('Journey Start',lambda:self.send('marker',event='Journey Start'))
         self.journey_end=self.button('Journey End',lambda:self.send('marker',event='Journey End'))
@@ -552,10 +580,13 @@ class MainWindow(QMainWindow):
         self.note_button=self.button('Note',self.add_note)
         for w in (self.journey_start,self.journey_end,self.marker_note,self.note_button): marker_row.addWidget(w)
         layout.addLayout(marker_row)
-        self.marker_table=table(['Marker UTC','Event','Note / evidence']); self.marker_table.setMaximumHeight(110)
+        self.marker_table=table(['Marker UTC','Event','Note / evidence']); self.marker_table.setMaximumHeight(80)
         layout.addWidget(self.marker_table)
-        self.capture_omissions=QTextEdit(); self.capture_omissions.setReadOnly(True); self.capture_omissions.setMaximumHeight(150)
-        layout.addWidget(self.capture_omissions)
+        self.capture_omissions=QTextEdit(); self.capture_omissions.setReadOnly(True)
+        evidence_tabs=QTabWidget(); evidence_tabs.setMaximumHeight(130)
+        evidence_tabs.addTab(self.capture_raw_detail,'Raw evidence')
+        evidence_tabs.addTab(self.capture_omissions,'Numeric omissions')
+        layout.addWidget(evidence_tabs)
         self.tabs.addTab(tab,'Drive Capture'); self.update_capture()
 
     def prepare_capture(self):
@@ -565,10 +596,17 @@ class MainWindow(QMainWindow):
         self.capture_list.clear()
         for pid,weight in options['weights'].items():
             sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
-            item=QListWidgetItem(f'{sensor.name} / 01{pid:02X} · weight {weight}')
+            item=QListWidgetItem(f'{sensor.name} / 01{pid:02X} · weight {weight}'+(' · NOx trend opt-in' if pid==0x83 else ''))
             item.setData(Qt.ItemDataRole.UserRole,pid); item.setFlags(item.flags()|Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if pid in preset['weights'] else Qt.CheckState.Unchecked)
             self.capture_list.addItem(item)
+        for pid,check in self.capture_raw_checks.items():
+            check.setChecked(False)
+            raw_plan=capture_plan(self.support,self.support_pages,self.discovery_observations,ecu,
+                                  prepared=prepared,selected=[],raw_selected=[pid])
+            check.setEnabled(pid in raw_plan['weights'])
+            check.setToolTip('Complete positive response; numeric interpretation remains disabled' if check.isEnabled()
+                             else '; '.join(e['reason'] for e in raw_plan['omitted']))
         self.capture_plan_ecu=ecu
         self.capture_omissions.setPlainText('\n'.join(f"01{e['pid']} {e['name']}: {e['reason']}" for e in options['omitted']) or 'All documented choices have valid support evidence.')
         self.capture_status.setText('Preset prepared; no requests started. Check choices, then press Start Drive Capture.')
@@ -578,6 +616,9 @@ class MainWindow(QMainWindow):
         return [self.capture_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.capture_list.count())
                 if self.capture_list.item(i).checkState()==Qt.CheckState.Checked]
 
+    def raw_selected(self):
+        return [pid for pid,check in self.capture_raw_checks.items() if check.isEnabled() and check.isChecked()]
+
     def add_note(self):
         self.send('marker',event='Note',note=self.marker_note.text())
         self.marker_note.clear()
@@ -585,18 +626,23 @@ class MainWindow(QMainWindow):
     def start_capture(self):
         if self.source_key()!=getattr(self,'capture_plan_ecu',None):
             return self.notice('ECU changed; prepare the Drive Capture preset for this ECU first')
-        self.send('drive_capture',ecu=self.source_key(),pids=self.capture_selected())
+        self.send('drive_capture',ecu=self.source_key(),pids=self.capture_selected(),raw_pids=self.raw_selected())
 
     def update_capture(self):
         if not hasattr(self,'capture_list'): return
         prepared=self.connected and self.discovery_prepared and self.source_key()==self.discovery_target and not self.requires_reconnect
         self.capture_preset.setEnabled(prepared and not (self.discovery_active and not self.polling_active))
-        self.capture_start.setEnabled(prepared and self.source_key()==getattr(self,'capture_plan_ecu',None) and (bool(self.capture_selected()) or self.capture_active))
+        self.capture_start.setEnabled(prepared and self.source_key()==getattr(self,'capture_plan_ecu',None) and (bool(self.capture_selected() or self.raw_selected()) or self.capture_active))
         self.capture_bundle.setEnabled(not self.recording_id and bool(self.sessions))
         self.bundle_button.setEnabled(not self.recording_id and bool(self.sessions))
+        values=self.warning_history.get(self.source_key(),[])
+        counter=('No warning-time counter observations' if not values else 'One counter sample; trend unavailable' if len(values)==1
+                 else f'Warning-time counter static across {len(values)} recent samples' if len(set(values))==1
+                 else f'Warning-time counter changed across {len(values)} recent samples')
+        self.capture_counter_note.setText(counter+'. Counter alone cannot establish a current SCR warning or fault. NOx (0183) is an unchecked manual option. RAW-only provides no numeric DPF pressure or SCR state.')
         for widget in (self.journey_start,self.journey_end,self.note_button,self.marker_note):
             widget.setEnabled(bool(self.recording_id) and self.mode!='REPLAY')
-        pids=[0x8B,0x7A,0x7C,0x0C,0x0D,0x05,0x85] if self.capture_focus.isChecked() else (self.capture_selected() or list(DRIVE_WEIGHTS))
+        pids=[0x8B,0x7A,0x7C,0x0C,0x0D,0x05,0x85] if self.capture_focus.isChecked() else (list(dict.fromkeys(self.capture_selected()+self.raw_selected())) or list(DRIVE_WEIGHTS))
         self.capture_table.setRowCount(len(pids))
         for row,pid in enumerate(pids):
             sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
@@ -618,9 +664,18 @@ class MainWindow(QMainWindow):
                 state+=' · '+sample.get('source_kind','UNKNOWN')
             elif state=='SUPPORTED': state='No valid supported field / unavailable'
             if sample.get('error'): state+=' · invalid: '+sample['error']
+            if sample.get('raw_only'):
+                value,unit='—',''
+                state=('Current raw sample' if current else 'REPLAY / recorded raw' if sample.get('replay') else 'Stale raw sample')+' · RAW ONLY / DECODER UNVERIFIED · '+sample.get('source_kind','UNKNOWN')
             gap=f'age {max(0,age):.2f} s' if age is not None else '—'
             if gaps: gap+=f' / max {max(gaps):.2f} s'
             update_row(self.capture_table,row,[field.get('name',sensor.name),value,unit,state,interval,gap,self.capture_weights.get(pid,'—')])
+        raw_details=[]
+        for pid in sorted(RAW_ONLY_PIDS):
+            sample=self.discovery_observations.get((self.source_key(),pid),{})
+            if sample.get('payload_hex'):
+                raw_details.append(dict(request=f'01{pid:02X}',**sample))
+        self.capture_raw_detail.setPlainText(json.dumps(raw_details,ensure_ascii=False,indent=2) if raw_details else 'RAW evidence appears after discovery; no numerical interpretation of an unknown layout.')
 
     def build_discovery(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
@@ -772,8 +827,9 @@ class MainWindow(QMainWindow):
                 self.support.clear(); self.support_pages.clear()
                 self.discovery_observations.clear(); self.discovery_active = False
                 self.discovery_prepared = False; self.discovery_target = None
-                self.capture_active=False; self.capture_weights.clear(); self.capture_history.clear()
+                self.capture_active=False; self.capture_weights.clear(); self.capture_raw_pids.clear(); self.capture_history.clear(); self.warning_history.clear()
                 self.capture_list.clear(); self.capture_plan_ecu=None
+                for check in self.capture_raw_checks.values(): check.setChecked(False); check.setEnabled(False)
                 self.marker_table.setRowCount(0)
                 self.discovery_reason = 'New connection/replay context; no discovery evidence'
                 self.ecu.clear(); self.ecu.addItem("Automatic first responding ECU", "")
@@ -795,6 +851,7 @@ class MainWindow(QMainWindow):
             elif kind == 'capture':
                 if value.get('context_id')!=self.context_id: continue
                 self.capture_active=value['active']; self.capture_weights=value['weights']; self.capture_ecu=value['ecu']
+                self.capture_raw_pids=set(value.get('raw_pids',[]))
                 self.capture_status.setText(value['reason'])
             elif kind == 'marker':
                 if value.get('context_id')!=self.context_id: continue
@@ -842,16 +899,21 @@ class MainWindow(QMainWindow):
                     self.capture_history.setdefault(key,deque(maxlen=30)).append(sent_at)
                 for sample in record.get('discovery_samples',[]):
                     self.discovery_observations[sample['ecu'] or 'headerless',sample['pid']] = sample
-                    if sample.get('monotonic_ns') and not sample.get('error') and any(f['state']=='AVAILABLE' for f in sample['fields']):
+                    if sample['pid']==0x85 and not sample.get('error'):
+                        field=next((f for f in sample['fields'] if f.get('sensor_id','').endswith('_warning_time') and f.get('state')=='AVAILABLE'),None)
+                        if field: self.warning_history.setdefault(sample['ecu'] or 'headerless',deque(maxlen=30)).append(field['value'])
+                    if sample.get('monotonic_ns') and not sample.get('error') and (sample.get('raw_only') or any(f['state']=='AVAILABLE' for f in sample['fields'])):
                         self.capture_history.setdefault((sample['ecu'] or 'headerless',sample['pid']),deque(maxlen=30)).append(sample['monotonic_ns']/1e9)
                 for problem in record.get('protocol_errors',[]):
-                    source = problem['ecu'] or 'unknown'
+                    source = problem['ecu'] or (self.capture_ecu if self.capture_active else None) or 'unknown'
                     if record.get('pid'):
                         pid = int(record['pid'],16)
                         self.sensor_errors[source,pid] = problem['reason']
                         if (source,pid) in self.readings: self.readings[source,pid]['invalid'] = True
                         previous = self.discovery_observations.get((source,pid),{})
                         self.discovery_observations[source,pid] = dict(previous,error=problem['reason'])
+                        if problem.get('category')!='DECODER_LAYOUT':
+                            self.discovery_observations[source,pid].update(framing_valid=False,raw_only=False,layout_status='INVALID_RESPONSE')
                 for rejection in record.get("negative_responses", []):
                     source = rejection["ecu"] or "headerless"
                     reason = f'{source}: {rejection["reason"]} (7F 01 {rejection["nrc"]})'
