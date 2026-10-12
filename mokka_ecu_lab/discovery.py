@@ -19,6 +19,7 @@ def discovery_report(support, pages, observations, *, mode='Disconnected', conte
                             'UNKNOWN' if state == 'unknown' else
                             'NO_SUPPORTED_FIELDS' if fields else 'UNVERIFIED')
             if sample.get('error'): availability = 'INVALID / UNVERIFIED'
+            if sample.get('raw_only'): availability = 'RAW ONLY / DECODER UNVERIFIED'
             entries.append(dict(metadata, ecu=ecu, support=state.upper(), availability=availability,
                                 vehicle_verification='UNVERIFIED', sample=sample,
                                 evidence=sample.get('source_kind','NO_SAMPLE')))
@@ -26,4 +27,6 @@ def discovery_report(support, pages, observations, *, mode='Disconnected', conte
             'standard':entries, 'manufacturer_candidates':list(RESEARCH_CANDIDATES),
             'limitations':['Support is ECU-specific; no claim of vehicle verification.',
                            'Functional OBD requests are broadcast; decoding only uses independently advertising ECUs.',
-                           'Samples are timestamped observations, never a health verdict or continuous-live claim.']}
+                           'Samples are timestamped observations, never a health verdict or continuous-live claim.',
+                           'RAW-only bypasses numeric interpretation; complete frames do not prove a documented layout.',
+                           '0185 warning-mode engine time is a counter, not a current SCR warning indicator.']}
