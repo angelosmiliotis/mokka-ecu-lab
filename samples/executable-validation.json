@@ -1,0 +1,9 @@
+{
+  "source": "SIMULATED",
+  "transactions": 11,
+  "errors_including_stop": 0,
+  "decoded_readings": 11,
+  "ended_cleanly": true,
+  "exit_code": 0,
+  "executable": "release/validated/MokkaECULab/MokkaECULab.exe"
+}

@@ -1,0 +1,20 @@
+{
+  "tests": "64 passed",
+  "native_gui": {
+    "mode": "SIMULATED",
+    "tabs": 5,
+    "readings": 10,
+    "raw_transactions": 31,
+    "errors": 0,
+    "connected": true,
+    "simulation": true
+  },
+  "demo": {
+    "source": "SIMULATED",
+    "raw_transactions": 37,
+    "errors_including_stop_cancellation": 1,
+    "decoded_csv_rows": 22
+  },
+  "hardware_verified": false,
+  "manufacturer_pids_verified": false
+}

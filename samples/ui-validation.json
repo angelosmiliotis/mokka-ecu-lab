@@ -1,0 +1,9 @@
+{
+  "mode": "SIMULATED",
+  "tabs": 5,
+  "readings": 10,
+  "raw_transactions": 31,
+  "errors": 0,
+  "connected": true,
+  "simulation": true
+}
