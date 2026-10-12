@@ -4,22 +4,31 @@ import re
 
 # This policy is code-owned, independent of editable sensor definitions.
 LIVE_PIDS = frozenset({0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x42, 0x46, 0x5C})
-BITMAP_PIDS = frozenset({0x00, 0x20, 0x40})
+BITMAP_PIDS = frozenset(range(0, 0x100, 0x20))
+DISCOVERY_PIDS = frozenset({0x73, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7F, 0x83, 0x85, 0x86, 0x88, 0x8B})
+DISCOVERY_SETUP = frozenset({'ATCAF1', 'ATCFC1', 'ATAL'})
 ADAPTER_COMMANDS = frozenset({"ATI", "STI", "ATE0", "ATL0", "ATS1", "ATH1", "ATM0", "ATTP0", "ATST64", "ATDP", "ATDPN"})
 
 class UnsafeRequest(ValueError):
     pass
 
-def validate_command(command: str, supported: set[int] | None = None) -> str:
+def validate_command(command: str, supported: set[int] | None = None, *,
+                     discovery_enabled=False, discovery_supported=None) -> str:
     # Reject injection, repeats, extra data, arbitrary AT/UDS and non-ASCII text.
     if not isinstance(command, str) or not re.fullmatch(r"[A-Za-z0-9]+", command):
         raise UnsafeRequest("Only exact allowlisted commands are permitted")
     command = command.upper()
     if command in ADAPTER_COMMANDS:
         return command
+    if command in DISCOVERY_SETUP and discovery_enabled:
+        return command
     if re.fullmatch(r"01[0-9A-F]{2}", command):
         pid = int(command[2:], 16)
-        if pid in BITMAP_PIDS or (pid in LIVE_PIDS and supported is not None and pid in supported):
+        if pid == 0 or (pid in LIVE_PIDS and supported is not None and pid in supported):
+            return command
+        if pid in {0x20, 0x40} and supported is not None and pid in supported:
+            return command
+        if discovery_enabled and discovery_supported is not None and pid in discovery_supported and pid in (DISCOVERY_PIDS | BITMAP_PIDS):
             return command
     raise UnsafeRequest(f"Request rejected by read-only policy: {command}")
 
@@ -37,11 +46,16 @@ class Response:
                 "reason": "Conditions Not Correct" if self.negative_code == 0x22 else f"ECU rejection NRC 0x{self.negative_code:02X}"}
 
 def parse_obd(raw: bytes, pid: int, command: str = "") -> list[Response]:
-    """Single-frame J1979 replies: bare, CAN 11/29-bit (optional DLC), legacy headers.
+    """Strict compatibility wrapper; detailed parsing retains per-ECU errors."""
+    from .isotp import parse_reply
+    result = parse_reply(raw, pid, command)
+    if result.errors:
+        raise ValueError('; '.join(e['reason'] for e in result.errors))
+    return result.responses
 
-    Multi-frame payloads are deliberately rejected; these PIDs never need them.
-    Raw bytes are retained separately, including echo, padding and prompt.
-    """
+
+def _legacy_parse_obd(raw: bytes, pid: int, command: str = "") -> list[Response]:
+    """Legacy single-frame fallback for ISO 9141/KWP and headerless data."""
     if b">" not in raw:
         raise ValueError("Incomplete adapter reply (missing prompt)")
     responses = []
