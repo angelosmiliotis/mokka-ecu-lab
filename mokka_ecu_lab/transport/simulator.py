@@ -2,7 +2,7 @@ import math
 import time
 from . import SafeTransport, TransportError, Cancelled
 
-SCENARIOS = ["Normal idle", "Warming up", "RPM variation", "Adapter timeout", "ECU timeout", "Malformed response", "Unsupported PID", "Disconnection", "Multiple ECUs", "Whitespace and echo", "Incomplete reply"]
+SCENARIOS = ["Normal idle", "Warming up", "RPM variation", "Adapter timeout", "ECU timeout", "Malformed response", "Unsupported PID", "Disconnection", "Multiple ECUs", "Whitespace and echo", "Incomplete reply", "Conditions Not Correct"]
 
 class Simulator(SafeTransport):
     def __init__(self, scenario="Normal idle"):
@@ -23,6 +23,8 @@ class Simulator(SafeTransport):
             payload = bits.to_bytes(4, "big")
         else:
             self.n += 1
+            if self.scenario == "Conditions Not Correct" and self.n >= 4:
+                return b"7E8 03 7F 01 22\r>"
             if self.scenario == "Adapter timeout" and self.n % 5 == 0:
                 raise TransportError("SIMULATED adapter timeout")
             if self.scenario == "Disconnection" and self.n >= 6:
