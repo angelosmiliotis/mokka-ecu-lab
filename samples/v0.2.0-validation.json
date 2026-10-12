@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "mode": "SIMULATED",
+  "tabs": 6,
+  "standard_pids": 12,
+  "available": 11,
+  "no_supported_fields": 1,
+  "raw_transactions": 33,
+  "errors": 0,
+  "dashboard_rows": 10,
+  "vehicle_verified": false,
+  "manufacturer_live_enabled": false,
+  "sessions_closed": true,
+  "test_suite": {
+    "passed": 240,
+    "failed": 0
+  },
+  "scope": "OFFLINE_ONLY",
+  "pid88_layout": "SAE OCT2011, 3 data bytes only",
+  "rate": "4 application commands/s aggregate",
+  "native_report": "release/v0.2.0-validation-final/discovery-report.json",
+  "native_screenshot": "release/v0.2.0-validation-final/discovery.png",
+  "packaged_smoke": {
+    "closed_sessions": 1,
+    "version": "0.2.0",
+    "vehicle_connection": false
+  }
+}
