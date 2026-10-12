@@ -16,6 +16,8 @@ from mokka_ecu_lab.sensors import load_registry
 from mokka_ecu_lab.logging import Recorder, utc_now
 from mokka_ecu_lab.replay import Replay
 from .scheduling import PollScheduler
+from mokka_ecu_lab.capture import capture_plan, DECODER_VERSION
+from mokka_ecu_lab import __version__
 
 class AcquisitionWorker(threading.Thread):
     def __init__(self, root: Path):
@@ -35,6 +37,9 @@ class AcquisitionWorker(threading.Thread):
         self.discovery_active = False
         self.discovery_target = None
         self.discovery_prepared = False
+        self.discovery_completed = False
+        self.capture_mode = False
+        self.capture_weights = {}
         self.can_protocol = False
         self.polling = False
         self.priorities = {}
@@ -47,6 +52,8 @@ class AcquisitionWorker(threading.Thread):
         self.replay_playing = False
         self.replay_speed = 1.0
         self.pending_record = None
+        self.pending_markers = {}
+        self.marker_lock = threading.Lock()
         self.replay_previous = None
         self.replay_due = 0.0
         self.start()
@@ -62,12 +69,23 @@ class AcquisitionWorker(threading.Thread):
                 except queue.Full: pass
 
     def submit(self, action, **kwargs):
-        if action in {"connect", "start", "discover", "monitor_discovery"}:
+        if action=='marker':
+            token=uuid.uuid4().hex
+            recorder=self.recorder
+            with self.marker_lock:
+                self.pending_markers[token]=dict(kwargs,session_id=recorder.id if recorder else None,
+                                                timestamp=utc_now(),monotonic_ns=time.monotonic_ns())
+            kwargs={'marker_id':token}
+        if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture"}:
             # Clear only at user submission, so a later Stop cancels queued Connect too.
             self.stop_io.clear()
         if action in {"disconnect", "stop", "shutdown", "replay"}:
             self.stop_io.set()
-        self.commands.put_nowait((action, kwargs))
+        try: self.commands.put_nowait((action, kwargs))
+        except queue.Full:
+            if action=='marker':
+                with self.marker_lock: self.pending_markers.pop(kwargs['marker_id'],None)
+            raise
 
     def transaction(self, command):
         sent_ns, stamp = time.monotonic_ns(), utc_now()
@@ -124,6 +142,13 @@ class AcquisitionWorker(threading.Thread):
             sent_ns = wire_ns
             for reading in readings:
                 reading["timestamp"], reading["monotonic_ns"] = stamp, sent_ns
+        for reading in readings:
+            if reading['pid'] in self.registry:
+                sensor=self.registry[reading['pid']]
+                self.discovery_observations[reading['ecu'] or 'headerless',reading['pid']] = dict(
+                    ecu=reading['ecu'],pid=reading['pid'],timestamp=stamp,monotonic_ns=sent_ns,
+                    source_kind=reading['source_kind'],replay=False,
+                    fields=[dict(sensor_id=sensor.id,name=sensor.name,value=reading['value'],unit=sensor.unit,state='AVAILABLE')])
         for sample in discovery_samples:
             sample['timestamp'], sample['monotonic_ns'] = stamp, sent_ns
             self.discovery_observations[sample['ecu'] or 'headerless', int(command[2:],16)] = sample
@@ -139,6 +164,10 @@ class AcquisitionWorker(threading.Thread):
             "parsed": parsed, "negative_responses": rejections, "decoder": [r["decoder"] for r in readings],
             "protocol_errors": protocol_errors, "discovery_samples": discovery_samples,
             "verification": [r["verification"] for r in readings], "error": error}
+        record.update(application_version=__version__,decoder_version=DECODER_VERSION)
+        if command.startswith('01') and int(command[2:],16) in DISCOVERY_PIDS:
+            record['support_evidence'] = {e:sorted(p) for e,p in self.support.items()}
+            record['support_pages'] = {e:sorted(p) for e,p in self.support_pages.items()}
         self.retain_discovery_errors(record)
         if self.recorder: self.recorder.append(record, readings)
         self.emit("transaction", (record, readings))
@@ -161,7 +190,7 @@ class AcquisitionWorker(threading.Thread):
         return sample
 
     def retain_discovery_errors(self, record):
-        if not record.get('pid') or int(record['pid'],16) not in STANDARD_DIESEL: return
+        if not record.get('pid') or int(record['pid'],16) not in (STANDARD_DIESEL.keys() | self.registry.keys()): return
         pid = int(record['pid'],16)
         problems = list(record.get('protocol_errors',[]))
         problems += [dict(ecu=e['ecu'],reason=f"{e['reason']} (7F 01 {e['nrc']})")
@@ -188,6 +217,22 @@ class AcquisitionWorker(threading.Thread):
         self.emit('discovery', dict(discovery_report(self.support, self.support_pages, self.discovery_observations,
                                                    mode=self.mode, context_id=self.context_id), active=active, reason=reason,
                                      prepared=self.discovery_prepared,target=self.discovery_target))
+        self.save_capture_evidence()
+
+    def save_capture_evidence(self):
+        if self.recorder:
+            self.recorder.evidence(dict(application_version=__version__,decoder_version=DECODER_VERSION,
+                evidence_saved_at=utc_now(),
+                context_id=self.context_id,mode=self.mode,discovery_prepared=self.discovery_prepared,
+                discovery_completed=self.discovery_completed,
+                discovery_target=self.discovery_target,capture_weights=self.capture_weights,
+                support={e:sorted(p) for e,p in self.support.items()},
+                support_pages={e:sorted(p) for e,p in self.support_pages.items()},
+                report=discovery_report(self.support,self.support_pages,self.discovery_observations,mode=self.mode,context_id=self.context_id)))
+
+    def emit_capture(self,reason):
+        self.emit('capture',dict(active=self.capture_mode,weights=dict(self.capture_weights),
+                                 ecu=self.discovery_target,reason=reason,context_id=self.context_id))
 
     def ingest_bitmap(self, record, base, publish=True):
         for item in record['parsed']:
@@ -208,12 +253,17 @@ class AcquisitionWorker(threading.Thread):
         if target not in self.support or target == 'headerless' or not self.can_protocol:
             raise ValueError('Choose an identified ECU on ISO 15765-4 CAN; headerless/legacy live discovery is disabled')
         self.set_polling(False, 'Standard discovery; basic polling paused')
+        self.capture_mode = False
+        self.capture_weights = {}
+        self.emit_capture('Discovery; no drive monitoring')
         self.discovery_target = target
         self.discovery_prepared = False
+        self.discovery_completed = False
         self.discovery_active = False
         self.transport.discovery_enabled = True
         self.transport.discovery_supported = set(self.support[target])
         self.emit_discovery(True, f'Discovering ECU {target}; functional Mode 01 requests only')
+        completed = False
         try:
             for command in ('ATCAF1','ATCFC1','ATAL'):
                 if 'OK' not in self.transaction(command)['raw_text'].upper():
@@ -231,9 +281,11 @@ class AcquisitionWorker(threading.Thread):
                 self.failures = self.failures+1 if record['status']!='OK' else 0
                 if self.failures >= 3:
                     self.set_polling(False, record['error'], requires_reconnect=True); break
+            completed = not self.requires_reconnect
         finally:
             self.transport.discovery_enabled = False
-            self.discovery_prepared = not self.stop_io.is_set() and not self.requires_reconnect
+            self.discovery_prepared = completed and not self.stop_io.is_set() and not self.requires_reconnect
+            self.discovery_completed = self.discovery_prepared
             self.emit_discovery(False, 'Discovery ended; samples only. Resume basic polling or explicitly start monitoring.')
 
     def set_polling(self, active, reason, requires_reconnect=False):
@@ -243,11 +295,16 @@ class AcquisitionWorker(threading.Thread):
 
     def close_recording(self):
         if self.recorder:
+            with self.marker_lock: tokens=list(self.pending_markers)
+            for token in tokens: self.persist_marker({'marker_id':token})
+            self.save_capture_evidence()
             self.recorder.close()
             self.recorder = None
         self.emit("recording", None)
 
     def disconnect(self, finish_recording=True):
+        self.capture_mode = False
+        self.emit_capture('Disconnected; cached values are historical')
         self.discovery_active = False
         self.discovery_prepared = False
         if self.transport: self.transport.discovery_enabled = False
@@ -268,6 +325,8 @@ class AcquisitionWorker(threading.Thread):
         self.support = {}
         self.support_pages = {}
         self.discovery_observations = {}
+        self.discovery_completed = False
+        self.capture_weights = {}
         self.discovery_target = None
         self.discovery_prepared = False
         self.can_protocol = False
@@ -313,9 +372,15 @@ class AcquisitionWorker(threading.Thread):
     def decode_replay(self, record):
         # Reclassify legacy v0.1.0 INVALID negative replies without rewriting the journal.
         record = dict(record, replay=True, context_id=self.context_id)
+        if record.get('record_type')=='marker':
+            self.emit('marker',record); return
         readings = []
         if record.get("pid"):
             pid = int(record["pid"], 16)
+            if pid in DISCOVERY_PIDS and record.get('support_evidence'):
+                self.support = {e:set(p) for e,p in record['support_evidence'].items()}
+                self.support_pages = {e:set(p) for e,p in record.get('support_pages',{}).items()}
+                self.emit('support',dict(self.support)); self.emit('support_pages',dict(self.support_pages))
             result = parse_reply(base64.b64decode(record['raw_b64']), pid, record['command'])
             replies = result.responses
             record['protocol_errors'] = result.errors
@@ -361,12 +426,39 @@ class AcquisitionWorker(threading.Thread):
 
     def handle(self, action, options):
         if action == "connect": self.initialize(options)
+        elif action == 'marker':
+            self.persist_marker(options)
         elif action == 'discover': self.discover(options.get('ecu'))
+        elif action == 'drive_capture':
+            target = options.get('ecu')
+            prepared = bool(self.transport and not self.requires_reconnect and self.can_protocol
+                            and self.discovery_prepared and target == self.discovery_target and not self.replay)
+            plan = capture_plan(self.support,self.support_pages,self.discovery_observations,target,
+                                prepared=prepared,selected=options.get('pids'))
+            if not plan['weights']:
+                if prepared:
+                    self.capture_mode = self.discovery_active = False
+                    self.capture_weights = {}
+                    self.transport.discovery_enabled = False
+                    self.set_polling(False,'No eligible Drive Capture selections; monitoring stopped')
+                    self.emit_capture('No eligible selections; monitoring stopped')
+                self.emit('notice','Drive Capture has no eligible selections; complete discovery and inspect omissions'); return
+            self.capture_weights = plan['weights']; self.capture_mode = True
+            if plan['omitted']: self.emit('notice','Omitted selections: '+ '; '.join(f"01{e['pid']}: {e['reason']}" for e in plan['omitted']))
+            self.discovery_active = bool(set(self.capture_weights)&DISCOVERY_PIDS)
+            self.transport.discovery_enabled = self.discovery_active
+            self.transport.discovery_supported = set(self.support.get(target,set()))
+            self.failures = 0; self.scheduler = PollScheduler()
+            self.set_polling(True,'Drive Capture; selected supported PIDs only')
+            self.emit_capture('Drive Capture active; observed intervals are not guaranteed')
+            self.emit_discovery(self.discovery_active,'Drive Capture monitoring; no repeated discovery')
         elif action == 'monitor_discovery':
             target = options.get('ecu')
             if not self.transport or self.requires_reconnect or not self.discovery_prepared or target != self.discovery_target or not self.can_protocol:
                 self.emit('notice','Run standard discovery for this ECU first; reconnect after errors'); return
             self.discovery_active = True
+            self.capture_mode = False
+            self.emit_capture('Standard monitoring')
             self.transport.discovery_enabled = True
             self.transport.discovery_supported = set(self.support.get(target,set()))
             self.failures = 0
@@ -374,6 +466,8 @@ class AcquisitionWorker(threading.Thread):
             self.emit_discovery(True,'Monitoring supported standard PIDs; vehicle unverified')
         elif action == "disconnect": self.disconnect()
         elif action == "stop":
+            self.capture_mode = False
+            self.emit_capture('Stopped; cached values are historical')
             self.discovery_active = False
             if self.transport: self.transport.discovery_enabled = False
             self.emit_discovery(False, 'Stopped; all previous samples are recorded evidence')
@@ -383,6 +477,10 @@ class AcquisitionWorker(threading.Thread):
             if self.requires_reconnect:
                 self.emit("notice", "Polling remains stopped after ECU failures. Check ignition and explicitly reconnect.")
             else:
+                self.capture_mode = False
+                self.discovery_active = False
+                self.transport.discovery_enabled = False
+                self.emit_capture('Basic monitoring resumed')
                 self.failures = 0
                 self.set_polling(bool(self.support), "Polling resumed")
         elif action == "select": self.selected = options["pids"]
@@ -396,6 +494,7 @@ class AcquisitionWorker(threading.Thread):
                 return
             if not self.recorder:
                 self.recorder = Recorder(self.root, self.mode if self.transport else "Pending connection", {"vehicle": "Opel Mokka B 2022 1.5 diesel", "adapter": "REDACTED", "VIN": "not queried"})
+                self.save_capture_evidence()
                 self.emit("recording", self.recorder.id)
         elif action == "record_stop":
             self.close_recording()
@@ -425,6 +524,19 @@ class AcquisitionWorker(threading.Thread):
             else: self.emit("notice", "Replay complete. " + '; '.join(self.replay.warnings))
         elif action == "shutdown": self.quit_event.set()
 
+    def persist_marker(self, options):
+        if 'marker_id' in options:
+            with self.marker_lock: pending=self.pending_markers.pop(options['marker_id'],None)
+            if pending is None: return  # Already flushed during canceled receive / finalization.
+            options=pending
+            if not self.recorder or options['session_id']!=self.recorder.id:
+                self.emit('notice','Marker has no active matching recording; not attached to another session'); return
+        if not self.recorder or self.replay:
+            self.emit('notice','Start Recording before adding a journey marker'); return
+        record=self.recorder.marker(options.get('event'),options.get('note',''),self.mode,
+                                    options.get('timestamp'),options.get('monotonic_ns'))
+        self.emit('marker',dict(record,context_id=self.context_id,replay=False))
+
     def run(self):
         try:
             while not self.quit_event.is_set():
@@ -439,10 +551,10 @@ class AcquisitionWorker(threading.Thread):
                 except Exception as exc:
                     self.emit("notice", str(exc)); self.disconnect()
                 if self.polling and self.transport and not self.stop_io.is_set():
-                    pids = [p for p in self.selected if p in LIVE_PIDS and p in self.transport.supported]
-                    if self.discovery_active:
+                    pids = list(self.capture_weights) if self.capture_mode else [p for p in self.selected if p in LIVE_PIDS and p in self.transport.supported]
+                    if self.discovery_active and not self.capture_mode:
                         pids += sorted(DISCOVERY_PIDS & self.support.get(self.discovery_target,set()))
-                    pid = self.scheduler.next(pids, self.priorities, allow_discovery=self.discovery_active)
+                    pid = self.scheduler.next(pids, self.capture_weights if self.capture_mode else self.priorities, allow_discovery=self.discovery_active)
                     if pid is None:
                         self.set_polling(False, "No selected supported sensors")
                         continue
@@ -455,6 +567,8 @@ class AcquisitionWorker(threading.Thread):
                                       else record["error"] or "Invalid ECU reply")
                             self.set_polling(False, reason, requires_reconnect=True)
                             self.discovery_active = False
+                            self.capture_mode = False
+                            self.emit_capture(reason)
                             self.transport.discovery_enabled = False
                             self.emit_discovery(False, reason)
                             self.emit("notice", f"Polling stopped after three consecutive ECU failures: {reason}. Values are stale. Stop Recording, check ignition and reconnect explicitly.")
