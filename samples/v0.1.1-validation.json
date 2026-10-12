@@ -1,0 +1,79 @@
+{
+  "version": "0.1.1",
+  "tests": {
+    "passed": 106,
+    "failed": 0,
+    "duration_seconds": 44.97
+  },
+  "read_only_allowlists": "unchanged",
+  "global_request_ceiling_hz": 4,
+  "native_gui_normal_simulation": {
+    "mode": "SIMULATED",
+    "tabs": 5,
+    "readings": 10,
+    "raw_transactions": 31,
+    "errors": 0,
+    "connected": true,
+    "simulation": true,
+    "version": "0.1.1",
+    "scenario": "Normal idle",
+    "polling": true,
+    "requires_reconnect": false,
+    "coverage": "ECU: 7E8 | selected supported: 10/10 | current: 10/10 | Polling",
+    "states": [
+      "Valid",
+      "Valid",
+      "Valid",
+      "Valid",
+      "Valid",
+      "Valid",
+      "Valid",
+      "Valid",
+      "Valid",
+      "Valid"
+    ],
+    "source_kinds": [
+      "SIMULATED"
+    ]
+  },
+  "native_gui_conditions_simulation": {
+    "mode": "SIMULATED",
+    "tabs": 5,
+    "readings": 3,
+    "raw_transactions": 20,
+    "errors": 3,
+    "connected": true,
+    "simulation": true,
+    "version": "0.1.1",
+    "scenario": "Conditions Not Correct",
+    "polling": false,
+    "requires_reconnect": true,
+    "coverage": "ECU: 7E8 | selected supported: 10/10 | current: 0/10 | Conditions Not Correct (7F 01 22); ignition state is not confirmed",
+    "states": [
+      "Stale (last success) \u00b7 7E8: Conditions Not Correct (7F 01 22)",
+      "Stale (last success) \u00b7 7E8: Conditions Not Correct (7F 01 22)",
+      "Stale (last success) \u00b7 7E8: Conditions Not Correct (7F 01 22)",
+      "ECU rejected / unavailable",
+      "ECU rejected / unavailable",
+      "ECU rejected / unavailable",
+      "Unavailable",
+      "Unavailable",
+      "Unavailable",
+      "Unavailable"
+    ],
+    "source_kinds": [
+      "SIMULATED"
+    ]
+  },
+  "packaged_executable": {
+    "path": "release/v0.1.1-20261012-143049/MokkaECULab/MokkaECULab.exe",
+    "smoke_exit_code": 0,
+    "mode": "SIMULATED",
+    "closed_session": true,
+    "transactions": 11,
+    "readings": 11,
+    "errors": 0
+  },
+  "vehicle_revalidation": "pending; no real serial port opened",
+  "full_user_logs_included": false
+}
