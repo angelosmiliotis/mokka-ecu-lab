@@ -1,0 +1,60 @@
+{
+  "discovery_layout_mismatches": 1,
+  "version": "0.2.4",
+  "mode": "SIMULATED",
+  "tabs": 7,
+  "raw_requests": [
+    "017A",
+    "0188"
+  ],
+  "raw_weights": [
+    1,
+    1
+  ],
+  "nox_samples": 3,
+  "monitoring_errors": 0,
+  "same_recording": true,
+  "vehicle_verified": false,
+  "private_input_used": false,
+  "bundle_files": 12,
+  "checksums_verified": true,
+  "raw_unchanged": true,
+  "raw_only_samples": 4,
+  "trend_charts": 6,
+  "sessions_closed": true,
+  "research_groups": 2,
+  "independent_verification": false,
+  "offline_research": true,
+  "recorded_raw_support_separate": true,
+  "unobserved_pid_states_correct": true,
+  "bitmap_unanchored_not_layout_error": true,
+  "scr_human_summary": true,
+  "private_html_json_export": true,
+  "html_external_resources": false,
+  "test_suite": {
+    "passed": 345,
+    "failed": 0
+  },
+  "read_only_allowlists_unchanged": true,
+  "rate": "4 application commands/s aggregate",
+  "numeric_decoders_unchanged": true,
+  "native_render_size": [
+    1320,
+    860
+  ],
+  "packaged_smoke": {
+    "exit_code": 0,
+    "requests": 11,
+    "errors": 0,
+    "closed_sessions": 1,
+    "vehicle_connection": false
+  },
+  "packaged_offline_analysis": {
+    "exit_code": 0,
+    "json_matches_source": true,
+    "html_matches_source": true,
+    "private_input_used": false
+  },
+  "private_evidence_distributed": false,
+  "copyrighted_source_distributed": false
+}
