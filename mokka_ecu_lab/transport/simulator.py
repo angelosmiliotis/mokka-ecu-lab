@@ -21,7 +21,7 @@ DIESEL_PAYLOADS = {
     0x83: bytes.fromhex('03 00 96 00 14 00 00 00 00'),
     0x85: bytes.fromhex('0F 00 28 00 32 CC 00 00 00 00'),
     0x86: bytes.fromhex('01 00 50 00 00'),
-    0x88: bytes.fromhex('00 00 00'),
+    0x88: bytes.fromhex('00 00 00 00 00 01 00 00 00 00 00 00 00'),
     0x8B: bytes.fromhex('73 03 80 01 2C 01 5E'),
 }
 
