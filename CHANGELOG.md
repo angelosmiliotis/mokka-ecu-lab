@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.2 — 2026-10-12
+
+- Separate unchecked RAW-only 017A/0188 opt-ins require completed per-ECU discovery, advertised support and a complete prior positive response. Weight 1 shares the unchanged global scheduler/rate cap. Unknown layouts produce no measurements; no request service or allowlist is added.
+- Record raw responses, layout/framing evidence and independently timestamped cached RPM/speed without extra queries. Replay stays offline; bundles add raw-observations.json and checksums while preserving originals.
+- Expose unchecked NOx selection for documented supported 0183 fields. Preserve all 0185/numeric decoders; explain static warning counters without current SCR-fault inference.
+- Add local CSV/Research Bundle trends with separate ECU/mode/source, recorded-point plots and summaries without interpolation or simultaneous-peak assumptions.
+- Fixtures are constructed and non-identifying. Private reports, logs, bundles, route timelines and derived private analysis remain outside the public repository and releases. Alternative layouts remain unverified; see research/v0.2.2-layout-verification.md.
+
 ## 0.2.1 — 2026-10-12
 
 - Drive Capture preset prepares preferred supported choices without transmitting; explicit Start uses the existing weighted scheduler and unchanged 4 application requests/s cap. Manual advanced PID choices require ECU-specific discovery and valid fields.

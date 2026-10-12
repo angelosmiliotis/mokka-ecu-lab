@@ -1,5 +1,11 @@
 # Architecture
 
+## v0.2.2 raw evidence and comparisons
+
+`layouts.py` records shape/source boundaries without alternative numeric formulas. The pure capture plan accepts an independent raw selection restricted to 017A/0188, with completed per-ECU discovery, advertised support and prior valid framing. Worker activation rechecks it, assigns weight 1 and uses existing transport permissions/scheduling. Raw transactions retain complete bytes, validity/layout metadata and cached independently timestamped RPM/speed; they create no numeric readings. Numeric layout errors have category DECODER_LAYOUT; malformed streams stay invalid and retain the failure latch. Replay honors raw-only provenance without a transport. Bundles add raw-observations.json to the original 11 components.
+
+`analysis/trends.py` reads local CSV or in-memory ZIP members, checks a supplied CSV checksum, bounds preview input and separates ECU/mode/source. Summaries use loaded measurements; chart previews bound points and do not interpolate, join samples or pair peaks. `ui/trends.py` displays source-separated charts/tables. Imports run on the GUI thread and may briefly pause it for large files. Private research files stay outside the repository.
+
 ## v0.2.1 capture and bundles
 
 `capture.py` builds a pure filtered plan; preparing a preset does not touch the worker or transport. Explicit activation revalidates support/fields and feeds the existing PollScheduler. The original basic selection/priorities remain independent. Advanced requests retain their existing scoped transport permissions. Session metadata stores evidence snapshots; advanced raw transactions also retain observed bitmap support for initialization-free replay. `logging/bundle.py` exports a closed selected session locally with atomic ZIP replacement and checksums, independently of current UI state. Marker records extend the journal with a separate record_type, do not increment request/error counts, and are replayed without a transport. A bounded command queue and session-bound pending marker map prevent duplication or attachment to another session during Stop/finalization. Export runs after recording stops; large exports may briefly occupy the UI thread.

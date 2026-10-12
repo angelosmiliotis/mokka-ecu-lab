@@ -1,6 +1,6 @@
 # Mokka ECU Lab
 
-Version 0.2.1 adds a staged Drive Capture preset with ECU-specific filtering, manual PID choices, weighted monitoring, a focused dashboard, local journey markers and one-click redacted Research Bundle export. See [the operator guide and exact button order](DRIVE_CAPTURE.md). All v0.2.0 discovery/ISO-TP features and v0.1.1 fixes remain. New vehicle support is unverified; implementation checks use simulation only.
+Version 0.2.2 adds separate opt-in RAW-only capture for supported 017A/0188, explicit NOx trend selection, layout evidence, static warning-counter explanations and local recorded comparisons by ECU/source. Unknown layouts never produce numeric pressure or SCR-state readings. See [the operator guide](DRIVE_CAPTURE.md) and [layout verification boundary](research/v0.2.2-layout-verification.md). Existing numeric decoders, read-only permissions and the aggregate 4 req/s cap are preserved. Implementation checks use synthetic data; private vehicle evidence is never distributed.
 
 A locally runnable Windows 11 desktop application for read-only OBD-II acquisition, recording, replay and offline decoder research. Python 3.12+ / PySide6 / pyserial. No account, telemetry or automatic connection. The first delivery includes ten generic Mode 01 sensors. Manufacturer-specific live requests are intentionally absent.
 
@@ -70,6 +70,7 @@ Baud choices 115200/38400/9600 are host settings; no automatic baud scan or pers
 .\.venv\Scripts\python.exe scripts\verify_ui.py
 .\.venv\Scripts\python.exe scripts\verify_discovery.py
 .\.venv\Scripts\python.exe scripts\verify_capture.py
+.\.venv\Scripts\python.exe scripts\verify_raw_capture.py
 .\.venv\Scripts\python.exe -m mokka_ecu_lab --smoke-test --data-dir samples\ui-smoke
 ```
 

@@ -1,5 +1,9 @@
 # Sensor registry
 
+## v0.2.2 RAW-only evidence
+
+Existing numeric definitions and validation remain unchanged. Separate opt-in 017A/0188 RAW-only monitoring creates no numeric sensor rows; complete framing does not validate an alternative format. Shape metadata records documented length/edition/table independently from observed length and missing alternative revision/source. NOx 0183 keeps individual supported-field gating. Warning-mode engine time in 0185 is a counter; static/nonzero values alone are not a current SCR-state indicator. See [layout/source boundaries](research/v0.2.2-layout-verification.md).
+
 ## v0.2 standard diesel fields
 
 The original JSON registry and ten-sensor dashboard remain intact. Twelve code-owned definitions in `mokka_ecu_lab/sensors/diesel.py` cover PIDs 73, 78, 79, 7A, 7B, 7C, 7F, 83, 85, 86, 88 and 8B. Discovery detail/export includes every field's layout, formula, units, support flag, validity, source table, edition and verification, plus source ECU and payload. Numeric outputs carry STANDARD_DOCUMENTED and vehicle UNVERIFIED. Unsupported fields produce null, not zero; malformed layouts produce no invented readings. History field identifiers are stable ASCII keys. OEM entries have no numeric decoder and cannot authorize transmission. See [research](research/v0.2-discovery.md) for historical-layout limits.

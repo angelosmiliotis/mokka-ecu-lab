@@ -1,5 +1,13 @@
 # Testing and vehicle validation
 
+## Version 0.2.2 RAW-only regression validation
+
+**276 tests passed** on 12 October 2026. Constructed 6-byte 7A and 13-byte 88 responses test complete ISO-TP lengths/padding, strict rejection by numeric decoders, separate unchecked RAW-only opt-ins, same-ECU support/discovery gating, bounded weight 1, unchanged measured aggregate wire intervals, Stop/finalization and the three-malformed-response reconnect latch. NOx and existing 85/numeric fields retain their decoders. Recording/bundle/replay checks prove no numeric raw-candidate measurements, original preservation, source separation and twelve-file checksums. Local trend checks cover ECU/mode/source isolation, independent sample instants, one-sample limits, static counters, tank quantization limits, invalid values/units, input bounds and CSV checksum failure.
+
+`scripts/verify_raw_capture.py --output-dir release/v0.2.2-native-final` passed on native Windows with the constructed alternative-layout simulator: 7 tabs, two deliberate discovery numeric-layout mismatches, RAW-only weight 1 for both candidates, repeated NOx, zero subsequent monitoring errors, the same recording, 12 bundle files with verified checksums, unchanged raw journal, clean session finalization and 6 source-separated chart tabs. The native screenshot was inspected and the capture table remained visible after grouping evidence panels. Private inputs were not used in software fixtures or native validation. No physical validation of v0.2.2 is claimed. Packaged simulation startup is checked separately before release; the portable summary is `samples/v0.2.2-validation.json`.
+
+The private supplied bundle was independently reviewed outside the public repository. Neither it, its CSV/raw data, its route chronology nor the supplied/derived private report is a distributed fixture or release asset. Public layout provenance and limitations are in [research/v0.2.2-layout-verification.md](research/v0.2.2-layout-verification.md).
+
 ## Version 0.2.1 Drive Capture
 
 **260 tests passed** on 12 October 2026. The native Windows UI completed discovery, all nine Drive Capture choices, seven focused readings, three journey markers, finalization and an eleven-file research ZIP with verified checksums and unchanged original bytes. No monitoring errors occurred in the synthetic run. Physical vehicle validation remains pending.

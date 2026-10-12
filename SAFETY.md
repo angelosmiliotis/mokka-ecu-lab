@@ -1,6 +1,6 @@
 # Read-only safety boundary
 
-v0.2.1 Drive Capture uses exactly the v0.2.0 request permissions below. Preset selection and manual checkbox edits do not send requests. Explicit Start rechecks ECU-specific support and valid advanced fields. OEM candidates stay offline. Journey markers are local journal events with no ECU command. Research Bundle export is local, requires a closed session, redacts device/personal metadata and free-text notes by default, and preserves original journals. See [DRIVE_CAPTURE.md](DRIVE_CAPTURE.md).
+v0.2.2 uses exactly the v0.2.0 request permissions below. Preset preparation, checkbox edits and offline trends never send requests. Explicit Start rechecks ECU-specific support and valid numeric fields. Separate RAW-only 017A/0188 opt-ins require a complete prior positive response from that ECU after completed discovery and have fixed weight 1; they cannot create measurements or a health/SCR verdict. Frame/negative/transport failures retain the stop/reconnect rule. Cached RPM/speed context requires no extra query. OEM candidates stay offline. Journey markers are local journal events. Research Bundle export requires a closed session, is local, redacts identifiers/free-text notes by default and preserves original journals. See [DRIVE_CAPTURE.md](DRIVE_CAPTURE.md).
 
 Version 0.2 allows only SAE Mode 01 reads from fixed code-owned sets. `SafeTransport.exchange` validates at the last public boundary before serial writes. It rejects carriage returns, whitespace, command chaining, extra bytes, empty repeats, arbitrary AT commands and all other diagnostic services. Sensor JSON cannot broaden this boundary.
 
@@ -35,5 +35,7 @@ Read-only OBD traffic still wakes the adapter/ECU and consumes bus and battery r
 Future manufacturer queries require documented read-only semantics, known request/response source, evidence review and explicit user authorization before changing the live policy. Decoder meaning needs independent physical validation. The current build has no mechanism to enable such a request through the GUI.
 
 ## Privacy and public sharing
+
+Private vehicle bundles, raw logs, CSVs, route timelines, supplied analysis and derived private reports must remain outside the public repository and release packages. Public fixtures are independently constructed isolated responses with artificial values, no session/device/route identity and no route chronology. Software validation summaries and screenshots use simulation only. Local trend import does not extract ZIP members or write back to the input; CSV checksums are checked when supplied in the bundle.
 
 No VIN request, cloud client, telemetry or upload code is present. Local original journals intentionally retain raw bytes. Default JSONL export redacts port, adapter string and ATI/STI reply bytes; decoded CSV excludes vehicle/adapter metadata. A diagnostic support checkbox retains original identifying information. Review raw payloads, ECU addresses, dates, operating patterns and file paths before sharing. Redaction does not guarantee anonymity; timestamps and measurements can still reveal usage patterns. Windows/OneDrive backup is external to the app.
