@@ -1,0 +1,61 @@
+{
+  "version": "0.2.1",
+  "mode": "SIMULATED",
+  "tabs": 7,
+  "selected": [
+    "018B",
+    "017A",
+    "017C",
+    "0178",
+    "010C",
+    "010D",
+    "0105",
+    "0110",
+    "0185"
+  ],
+  "weights": {
+    "139": 4,
+    "122": 3,
+    "124": 2,
+    "120": 2,
+    "12": 2,
+    "13": 2,
+    "5": 1,
+    "16": 1,
+    "133": 1
+  },
+  "focused_rows": 7,
+  "errors": 0,
+  "same_recording_through_transition": true,
+  "vehicle_verified": false,
+  "states": [
+    "Current sample \u00b7 SIMULATED",
+    "Current sample \u00b7 SIMULATED",
+    "Current sample \u00b7 SIMULATED",
+    "Current sample \u00b7 SIMULATED",
+    "Current sample \u00b7 SIMULATED",
+    "Current sample \u00b7 SIMULATED",
+    "Current sample \u00b7 SIMULATED"
+  ],
+  "bundle_files": 11,
+  "bundle_checksums_verified": true,
+  "raw_unchanged": true,
+  "sessions_closed": true,
+  "recorded_requests": 49,
+  "journey_markers": 3,
+  "test_suite": {
+    "passed": 260,
+    "failed": 0
+  },
+  "manufacturer_live_enabled": false,
+  "scope": "OFFLINE_ONLY",
+  "rate": "4 application commands/s aggregate",
+  "pid88_layout": "SAE OCT2011, 3 data bytes only",
+  "native_screenshot": "release/v0.2.1-delivery-validation/drive-capture.png",
+  "packaged_smoke": {
+    "exit_code": 0,
+    "closed_sessions": 1,
+    "version": "0.2.1",
+    "vehicle_connection": false
+  }
+}
