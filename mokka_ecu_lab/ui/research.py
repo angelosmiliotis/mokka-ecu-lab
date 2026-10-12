@@ -2,10 +2,12 @@
 import json
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QComboBox,
-    QTabWidget,QTextEdit,QTableWidget,QTableWidgetItem,QHeaderView,QFileDialog,QMessageBox)
+    QTabWidget,QTextEdit,QTableWidget,QTableWidgetItem,QHeaderView,QFileDialog,QMessageBox,QSplitter,QCheckBox)
 from PySide6.QtCharts import QChart,QChartView,QScatterSeries
 from mokka_ecu_lab.research.catalog import KnowledgeBase,STATUSES,new_catalog
 from mokka_ecu_lab.research.evidence import analyze_bundles,save_analysis
+from mokka_ecu_lab.research.report import load_analysis,export_private_report,RECOMMENDATIONS
+from mokka_ecu_lab.research.summary import summary_lines
 
 
 def grid(headers):
@@ -39,11 +41,23 @@ class ResearchView(QWidget):
         evidence_tab=QWidget(); e=QVBoxLayout(evidence_tab)
         actions=QHBoxLayout()
         self.import_button=QPushButton('Import local Research Bundles…'); self.import_button.clicked.connect(self.import_bundles); actions.addWidget(self.import_button)
-        self.save_button=QPushButton('Save private analysis…'); self.save_button.clicked.connect(self.save_analysis); self.save_button.setEnabled(False); actions.addWidget(self.save_button)
-        self.group=QComboBox(); self.group.currentIndexChanged.connect(self.show_group); actions.addWidget(self.group,1); e.addLayout(actions)
+        self.import_analysis_button=QPushButton('Open saved analysis…'); self.import_analysis_button.clicked.connect(self.open_analysis); actions.addWidget(self.import_analysis_button)
+        self.save_button=QPushButton('Export private research report…'); self.save_button.clicked.connect(self.save_analysis); self.save_button.setEnabled(False); actions.addWidget(self.save_button)
+        e.addLayout(actions)
+        self.detailed_report=QCheckBox('Include private raw preview and timestamps in HTML (explicit detailed mode)'); e.addWidget(self.detailed_report)
+        privacy=QLabel('Before sharing: review both files. JSON preserves full private evidence; compact HTML omits identity fields and raw timelines. HTML covers the selected source group. Existing files are preserved.'); privacy.setWordWrap(True); e.addWidget(privacy)
+        self.group=QComboBox(); self.group.currentIndexChanged.connect(self.show_group); e.addWidget(self.group)
         self.evidence_tabs=QTabWidget(); e.addWidget(self.evidence_tabs,1)
-        self.matrix=grid(['PID','Support','Framing valid / invalid','Negative','Lengths: count','Layout mismatches','Definition','Observation'])
-        self.evidence_tabs.addTab(self.matrix,'Compatibility')
+        compatibility=QWidget(); compat=QVBoxLayout(compatibility)
+        unknown=QLabel('What does UNKNOWN mean? Raw support needs the original ordered bitmap chain. A recorded snapshot is separate evidence. Positive replies prove observation, not decoder certification or component health.'); unknown.setWordWrap(True); compat.addWidget(unknown)
+        self.matrix=grid(['PID','Recorded support (snapshot)','Raw bitmap support','Positive samples','Frame validity (valid / invalid)','Negative','Lengths: count','Layout state','Layout errors','Definition','Observation provenance','Notes'])
+        self.matrix.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for i,width in enumerate((75,190,150,115,220,85,140,245,100,195,215,400)): self.matrix.setColumnWidth(i,width)
+        self.matrix.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.matrix.itemSelectionChanged.connect(self.show_matrix_detail)
+        split=QSplitter(Qt.Orientation.Vertical); split.addWidget(self.matrix)
+        self.matrix_detail=QTextEdit(); self.matrix_detail.setReadOnly(True); split.addWidget(self.matrix_detail); split.setSizes([320,140]); compat.addWidget(split,1)
+        self.evidence_tabs.addTab(compatibility,'Compatibility')
         self.samples=grid(['PID','Acquired UTC','Data bytes','Layout','RPM / age','MAF / age','Speed / age'])
         self.evidence_tabs.addTab(self.samples,'Byte samples & context')
         chart_tab=QWidget(); chart_layout=QVBoxLayout(chart_tab); chart_row=QHBoxLayout()
@@ -51,7 +65,9 @@ class ResearchView(QWidget):
         chart_layout.addLayout(chart_row); self.chart=QChart(); self.chart.setTheme(QChart.ChartTheme.ChartThemeDark)
         self.chart_view=QChartView(self.chart); chart_layout.addWidget(self.chart_view)
         self.evidence_tabs.addTab(chart_tab,'017A byte time series')
+        self.scr_detail=QTextEdit(); self.scr_detail.setReadOnly(True); self.evidence_tabs.addTab(self.scr_detail,'SCR / AdBlue summary')
         self.evidence_detail=QTextEdit(); self.evidence_detail.setReadOnly(True); self.evidence_tabs.addTab(self.evidence_detail,'Findings & requirements')
+        checklist=QTextEdit(); checklist.setReadOnly(True); checklist.setPlainText('OFFLINE PREPARATION ONLY · no commands are sent\n\n'+'\n\n'.join(RECOMMENDATIONS)); self.evidence_tabs.addTab(checklist,'Next recording checklist')
         self.tabs.addTab(evidence_tab,'Offline evidence analyzer'); self.tabs.addTab(hypotheses,'EXPERIMENTAL hypotheses')
         self.refresh_catalog()
 
@@ -77,7 +93,17 @@ class ResearchView(QWidget):
 
     def load_paths(self,paths):
         report=analyze_bundles(paths)
-        self.catalog.record_evidence(report); self.report=report; self.input_paths=list(paths); self.refresh_catalog()
+        self.catalog.record_evidence(report); self.input_paths=list(paths); self.set_report(report); self.refresh_catalog()
+
+    def open_analysis(self):
+        path,_=QFileDialog.getOpenFileName(self,'Open saved private analysis (original ZIP is not revalidated)',str(self.root),'JSON (*.json)')
+        if path:
+            try:
+                report=load_analysis(path); self.input_paths=[path]; self.set_report(report)
+            except Exception as exc: QMessageBox.warning(self,'Saved analysis',str(exc))
+
+    def set_report(self,report):
+        self.report=report
         self.group.blockSignals(True); self.group.clear()
         for index,session in enumerate(report['sessions'],1):
             for g in session['groups']:
@@ -88,8 +114,14 @@ class ResearchView(QWidget):
         data=self.group.currentData()
         if not data: return
         session,g=data
-        fill(self.matrix,[[e['request'],e['support'],f"{e['valid_framing']} / {e['invalid_framing']}",e['negative_responses'],
-            e['lengths'],e['layout_mismatches'],e['status'],e['vehicle_evidence']] for e in g['matrix']])
+        self.scr_detail.setPlainText('\n\n'.join(summary_lines(g['scr_summary'])))
+        self.matrix_rows=g['matrix']
+        fill(self.matrix,[[e['request'],e['recorded_discovery_support'],e['raw_bitmap_support'],e['positive_response_count'],
+            f"{e['frame_validity']} · {e['valid_framing']} / {e['invalid_framing']}",e['negative_responses'],
+            e['lengths'],e['layout_state'],e['layout_mismatches'],e['definition_state'],e['observation_state'].replace('_',' '),
+            e['evidence_explanation'][:160]] for e in g['matrix']])
+        for row,e in enumerate(g['matrix']): self.matrix.item(row,11).setToolTip(e['evidence_explanation'])
+        self.matrix.selectRow(0); self.show_matrix_detail()
         def context(sample,name):
             c=sample['context'][name]
             return 'UNAVAILABLE' if c['state']=='UNAVAILABLE' else f"{c['value']:g} {c['unit']} / {c['age_seconds']:.3f}s · cached"
@@ -100,6 +132,11 @@ class ResearchView(QWidget):
             recorded_decoder_versions=session['recorded_decoder_versions'],current_decoder=self.report['decoder_version'],
             preview_limit=g['preview_limit'],preview_truncated=g['preview_truncated'],matrix=g['matrix'],samples=g['samples']),ensure_ascii=False,indent=2))
         self.show_chart()
+
+    def show_matrix_detail(self):
+        row=self.matrix.currentRow()
+        if hasattr(self,'matrix_rows') and 0<=row<len(self.matrix_rows):
+            self.matrix_detail.setPlainText(json.dumps(self.matrix_rows[row],ensure_ascii=False,indent=2))
 
     def show_chart(self):
         if not hasattr(self,'chart'): return
@@ -115,8 +152,10 @@ class ResearchView(QWidget):
 
     def save_analysis(self):
         if not self.report: return
-        path,_=QFileDialog.getSaveFileName(self,'Save private local analysis',str(self.root/'research-analysis.json'),'JSON (*.json)')
+        path,_=QFileDialog.getSaveFileName(self,'Export private research report (HTML + full JSON, or JSON only)',str(self.root/'private-research-report.html'),'HTML (*.html);;JSON (*.json)')
         if path:
             try:
-                save_analysis(self.report,path,self.input_paths)
+                selected=self.group.currentData()
+                selection=next(((si,gi) for si,s in enumerate(self.report['sessions']) for gi,g in enumerate(s['groups']) if s is selected[0] and g is selected[1]),None) if selected else None
+                export_private_report(self.report,path,self.input_paths,selection,self.detailed_report.isChecked())
             except Exception as exc: QMessageBox.warning(self,'Save analysis',str(exc))
