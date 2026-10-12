@@ -72,7 +72,12 @@ def list_sessions(root: Path) -> list[dict]:
 
 def export_csv(root: Path, session_id: str, target: Path):
     db = connect_database(root)
-    cursor = db.execute("SELECT r.timestamp,r.monotonic_ns,r.sensor_id,r.ecu,r.value,r.unit,r.verification,r.transaction_id,COALESCE(r.mode,s.mode) AS source_mode FROM readings r JOIN sessions s ON r.session_id=s.id WHERE r.session_id=? ORDER BY r.monotonic_ns", (session_id,))
+    cursor = db.execute("""SELECT r.timestamp,r.monotonic_ns,r.sensor_id,r.ecu,r.value,r.unit,r.verification,r.transaction_id,
+        COALESCE(r.mode,s.mode) AS source_mode,
+        CASE WHEN COALESCE(r.mode,s.mode)='SIMULATED' THEN 'SIMULATED'
+             WHEN COALESCE(r.mode,s.mode) LIKE 'LIVE%' THEN 'ECU_READING'
+             ELSE 'UNKNOWN' END AS source_kind
+        FROM readings r JOIN sessions s ON r.session_id=s.id WHERE r.session_id=? ORDER BY r.monotonic_ns""", (session_id,))
     with target.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([x[0] for x in cursor.description])
