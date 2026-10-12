@@ -1,4 +1,8 @@
 # Read-only safety boundary
+## v0.2.3 correction and offline research
+
+0188 uses the exact 13-data-byte SAE OCT2011 B115 definition, with 26 fields covering current flags, latched history and five distance counters. The old three-byte label was wrong. Six-byte 017A remains UNVERIFIED_LAYOUT. RAW-only disables numeric output even for a documented response. The local catalog and evidence analyzer never configure transport permissions or promote hypotheses. No new vehicle queries or backend exist. See [sources, limits and workflow](research/v0.2.3-offline-engine.md).
+
 
 v0.2.2 uses exactly the v0.2.0 request permissions below. Preset preparation, checkbox edits and offline trends never send requests. Explicit Start rechecks ECU-specific support and valid numeric fields. Separate RAW-only 017A/0188 opt-ins require a complete prior positive response from that ECU after completed discovery and have fixed weight 1; they cannot create measurements or a health/SCR verdict. Frame/negative/transport failures retain the stop/reconnect rule. Cached RPM/speed context requires no extra query. OEM candidates stay offline. Journey markers are local journal events. Research Bundle export requires a closed session, is local, redacts identifiers/free-text notes by default and preserves original journals. See [DRIVE_CAPTURE.md](DRIVE_CAPTURE.md).
 

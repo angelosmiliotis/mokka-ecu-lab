@@ -1,18 +1,20 @@
-# v0.2.2 Drive Capture operator guide
+# v0.2.3 Drive Capture operator guide
 
 ## RAW-only and NOx opt-ins
 
-After completed stationary Discovery, prepare **Drive Capture** normally. Unknown numeric layouts stay excluded from the numeric list. Separate unchecked **Opt in 017A RAW ONLY / DECODER UNVERIFIED** and **Opt in 0188 RAW ONLY / DECODER UNVERIFIED** controls require advertised support and a complete prior positive response from the same ECU. Checking them sends nothing; **Start Drive Capture** applies weight 1 inside the unchanged global cap. RAW-only takes precedence over numeric selection of the same PID and produces no measurements. Select the unchecked **NOx concentrations / 0183** manual choice for supported documented NOx trends. Discovery is never repeated during capture.
+After completed stationary Discovery, prepare **Drive Capture** normally. Unknown numeric layouts stay excluded from the numeric list. Separate unchecked **Opt in 017A RAW ONLY / DECODER UNVERIFIED** and **Opt in 0188 RAW ONLY** controls require advertised support and a complete prior positive response from the same ECU. Checking them sends nothing; **Start Drive Capture** applies weight 1 inside the unchanged global cap. RAW-only takes precedence over numeric selection of the same PID and produces no measurements. Select the unchecked **NOx concentrations / 0183** manual choice for supported documented NOx trends. Discovery is never repeated during capture.
 
-RAW-only retains responses, lengths, ECU/source, acquisition times, validity/layout evidence and separately timestamped cached RPM/speed with age or UNAVAILABLE. The numeric value is a dash. Context is not simultaneous and requires no extra request. Unknown 6-byte 7A / 13-byte 88 shapes have no numeric decoder; see [verification requirements](research/v0.2.2-layout-verification.md).
+RAW-only retains responses, lengths, ECU/source, acquisition times, validity/layout evidence and separately timestamped cached RPM/speed with age or UNAVAILABLE. The numeric value is a dash. Context is not simultaneous and requires no extra request. The unknown six-byte 7A shape has no numeric decoder. OCT2011 B115 now decodes exactly 13-byte 88 numerically unless explicitly selected RAW-only; see [verification requirements](research/v0.2.3-offline-engine.md).
 
 Sessions → **Recorded trends from CSV / Research Bundle…** opens a local file and checks its CSV checksum when present. Choose an ECU/mode/source group. Speed, RPM, MAF, tank and supported NOx plots use recorded points; summaries retain independent sample counts/gaps. No interpolation or paired-peak inference is performed. The warning counter is described as static/changed evidence, never a current fault indicator. Preview bounds: 2000 plotted points/field, 64 MiB/250000 imported CSV rows. Originals are unchanged.
 
 This release prepares one consolidated stationary-discovery and short-journey recording. All implementation checks use simulation; actual vehicle support, accuracy, Bluetooth behavior and road reliability remain unverified. Existing standard/OEM request permissions and the aggregate 4 application requests/s ceiling are unchanged. D525/D526/D52F/D532 remain offline research only. No session transition, brute-force scan, regeneration command, write/reset/clear/coding/adaptation or automatic reconnect is introduced.
 
+Documented **0188 numeric monitoring** is now an unchecked manual choice when Discovery validates its 13-byte B115 layout. Select that choice for current/history/counter fields, or opt into 0188 RAW-only to suppress all numeric output. RAW-only takes precedence if both are checked. No new recording is required for offline development; future context/reference requirements are in [the v0.2.3 guide](research/v0.2.3-offline-engine.md).
+
 ## Windows executable
 
-The local package is `release/v0.2.2-windows11/MokkaECULab/MokkaECULab.exe`. Keep `_internal` alongside it. Download the complete [v0.2.2 Windows release](https://github.com/angelosmiliotis/mokka-ecu-lab/releases/tag/v0.2.2), extract the folder and run that executable. Previous v0.2.1 and v0.2.0 folders/releases remain available.
+The local package is `release/v0.2.3-windows11/MokkaECULab/MokkaECULab.exe`. Keep `_internal` alongside it. Download the complete [v0.2.3 Windows release](https://github.com/angelosmiliotis/mokka-ecu-lab/releases/tag/v0.2.3), extract the folder and run that executable. Previous v0.2.1 and v0.2.0 folders/releases remain available.
 
 ## Exact button order
 
@@ -31,11 +33,11 @@ The preset and worker both require completed explicit discovery for the selected
 
 Stop revokes advanced transmit scope; Resume returns to basic monitoring. Three consecutive ECU failures still stop acquisition and require explicit reconnect. Selecting a preset never starts or repeats discovery. Monitoring and discovery retain one original journal and decoded database. New advanced transactions retain previously observed support evidence so replay can decode a session whose recording began after initialization, without fabricating unrecorded bitmap transactions. Session evidence snapshots are stored durably in local SQLite metadata, with their own save timestamp; an export uses that session's snapshot rather than the current GUI or another connection.
 
-The documented OCT2011 decoder limits remain: PID 88 accepts three data bytes only, longer revisions remain unverified; 8B historical averages do not supply distance since the latest regeneration. Source edition, units, formulas, individual field support and vehicle UNVERIFIED classification remain visible in Discovery and its report. No physical validation was performed for this patch.
+The corrected OCT2011 decoder limits are: PID 88 accepts exactly 13 data bytes (B115 pages 82–84); three-byte replies are unverified, and current state is separate from latched history; 8B historical averages do not supply distance since the latest regeneration. Source edition, units, formulas, individual field support and vehicle UNVERIFIED classification remain visible in Discovery and its report. No physical validation was performed for this patch.
 
 ## Research Bundle contents and privacy
 
-v0.2.2 adds **raw-observations.json** to the eleven original files: 017A/0188 payloads, validity/layout/source evidence, RAW-only flag and recorded cached context. The ZIP now has twelve files; SHA256SUMS covers every content file and manifest. Legacy journals can expose raw candidate bytes without inventing absent RPM/speed context. Raw observations remain private diagnostic data; export never uploads them.
+v0.2.3 adds **raw-observations.json** to the eleven original files: 017A/0188 payloads, validity/layout/source evidence, RAW-only flag and recorded cached context. The ZIP now has twelve files; SHA256SUMS covers every content file and manifest. Legacy journals can expose raw candidate bytes without inventing absent RPM/speed context. Raw observations remain private diagnostic data; export never uploads them.
 
 The ZIP contains redacted raw JSONL, decoded CSV, Discovery report, session summary (start/end/duration, versions, transaction/sent-request counts, weights), supported/unsupported/unknown PID summary, ECU response identifiers, observed per-PID/per-field sample counts and intervals, communication/decoding errors, markers, a manifest and SHA256SUMS.txt. Checksums cover all other files including the manifest; the checksum file cannot hash itself. Unknown recording/decoder versions and absent discovery evidence are listed in the manifest instead of invented. Legacy recordings remain exportable with those limitations.
 
@@ -43,6 +45,6 @@ Original raw journals are unchanged. Adapter/port identity and ATI/STI identific
 
 ## Reproduction
 
-For v0.2.2, `scripts/verify_raw_capture.py --output-dir release/v0.2.2-validation` exercises constructed alternative shapes, unchecked no-send opt-ins, NOx monitoring, raw/numeric separation, closed bundle checksums and GUI source-separated trends. All evidence from this script is SIMULATED. Portable software summary: `samples/v0.2.2-validation.json`. The older capture script below continues to exercise documented numeric layouts.
+For v0.2.3, `scripts/verify_raw_capture.py --output-dir release/v0.2.3-validation` exercises constructed alternative shapes, unchecked no-send opt-ins, NOx monitoring, raw/numeric separation, closed bundle checksums and GUI source-separated trends. All evidence from this script is SIMULATED. Portable software summary: `samples/v0.2.3-validation.json`. The older capture script below continues to exercise documented numeric layouts.
 
 Run `python -m pytest -q` in the project environment. `scripts/verify_capture.py --output-dir release/v0.2.1-validation-final` runs the native Windows simulator through recording, discovery, preset preparation, weighted monitoring, all three marker types, Finish/Disconnect and the actual GUI bundle action. It checks recording continuity, seven focused rows, original raw preservation and every file checksum. The portable result is `samples/v0.2.1-validation.json`. Packaging occurs only after software tests pass; no result is a physical vehicle validation claim.

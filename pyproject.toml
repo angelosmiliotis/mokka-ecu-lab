@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokka-ecu-lab"
-version = "0.2.2"
+version = "0.2.3"
 description = "Local read-only OBD-II acquisition and offline research"
 requires-python = ">=3.12"
 dependencies = ["PySide6>=6.8,<7", "pyserial>=3.5,<4"]
@@ -19,7 +19,7 @@ mokka-ecu-lab = "mokka_ecu_lab.__main__:main"
 include = ["mokka_ecu_lab*"]
 
 [tool.setuptools.package-data]
-mokka_ecu_lab = ["sensors/*.json"]
+mokka_ecu_lab = ["sensors/*.json", "research/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

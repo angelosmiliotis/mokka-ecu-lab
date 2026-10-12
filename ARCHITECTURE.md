@@ -1,4 +1,8 @@
 # Architecture
+## v0.2.3 correction and offline research
+
+0188 uses the exact 13-data-byte SAE OCT2011 B115 definition, with 26 fields covering current flags, latched history and five distance counters. The old three-byte label was wrong. Six-byte 017A remains UNVERIFIED_LAYOUT. RAW-only disables numeric output even for a documented response. The local catalog and evidence analyzer never configure transport permissions or promote hypotheses. No new vehicle queries or backend exist. See [sources, limits and workflow](research/v0.2.3-offline-engine.md).
+
 
 ## v0.2.2 raw evidence and comparisons
 

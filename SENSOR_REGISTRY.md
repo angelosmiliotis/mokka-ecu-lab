@@ -1,8 +1,12 @@
 # Sensor registry
+## v0.2.3 correction and offline research
+
+0188 uses the exact 13-data-byte SAE OCT2011 B115 definition, with 26 fields covering current flags, latched history and five distance counters. The old three-byte label was wrong. Six-byte 017A remains UNVERIFIED_LAYOUT. RAW-only disables numeric output even for a documented response. The local catalog and evidence analyzer never configure transport permissions or promote hypotheses. No new vehicle queries or backend exist. See [sources, limits and workflow](research/v0.2.3-offline-engine.md).
+
 
 ## v0.2.2 RAW-only evidence
 
-Existing numeric definitions and validation remain unchanged. Separate opt-in 017A/0188 RAW-only monitoring creates no numeric sensor rows; complete framing does not validate an alternative format. Shape metadata records documented length/edition/table independently from observed length and missing alternative revision/source. NOx 0183 keeps individual supported-field gating. Warning-mode engine time in 0185 is a counter; static/nonzero values alone are not a current SCR-state indicator. See [layout/source boundaries](research/v0.2.2-layout-verification.md).
+Existing NOx/AdBlue and other numeric definitions remain unchanged; 0188 is corrected as described above. Separate opt-in 017A/0188 RAW-only monitoring creates no numeric sensor rows; complete framing does not validate an alternative format. Shape metadata records documented length/edition/table independently from observed length and missing alternative revision/source. NOx 0183 keeps individual supported-field gating. Warning-mode engine time in 0185 is a counter; static/nonzero values alone are not a current SCR-state indicator. See [layout/source boundaries](research/v0.2.2-layout-verification.md).
 
 ## v0.2 standard diesel fields
 

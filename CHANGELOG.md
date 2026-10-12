@@ -1,5 +1,15 @@
 # Changes
 
+## 0.2.3
+
+- Corrected OCT2011 B115 PID 88 to exactly 13 data bytes: current activation/reasons, four latched history blocks and five unsigned kilometre counters. Three-byte layouts are unverified; RAW-only remains an optional numeric bypass. Counter anomalies are surfaced without clipping or inventing sentinels. Vehicle verification stays UNVERIFIED.
+- Six-byte 017A remains complete framing with unverified numeric layout. No added/dropped byte, pressure formula or DPF health inference.
+- Local versioned JSON knowledge base records provisional identity, code-owned layouts/provenance and per-ECU evidence separately. Hypotheses stay EXPERIMENTAL or explicitly REJECTED.
+- Bounded offline bundle analyzer validates checksums, reparses original wire bytes, compares layout/support/framing and byte changes, and shows cached RPM/MAF/speed with timestamps/age. Multiple sessions, ECUs and LIVE/SIMULATED sources stay separate. Original CSV/raw data is unchanged.
+- Research view adds catalog, compatibility matrix, byte/context tables, 017A scatter charts, findings and local hypothesis persistence. A definition-only schema provides a future contribution foundation; no remote backend or uploader exists.
+- All read-only allowlists and the aggregate 4 req/s ceiling are unchanged. No VIN/identity queries or OEM candidates are enabled. Private data and copyrighted source pages are excluded.
+
+
 ## 0.2.2 — 2026-10-12
 
 - Separate unchecked RAW-only 017A/0188 opt-ins require completed per-ECU discovery, advertised support and a complete prior positive response. Weight 1 shares the unchanged global scheduler/rate cap. Unknown layouts produce no measurements; no request service or allowlist is added.
