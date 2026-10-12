@@ -7,8 +7,8 @@ The Qt main thread owns display widgets and bounded previews. One `AcquisitionWo
 | Package | Responsibility |
 |---|---|
 | `transport` | Port enumeration, 8N1 serial framing, strict pre-write safety validation, rate cap, cancellation, synthetic fixtures |
-| `adapter` | Single-worker lifetime, identity/configuration, per-ECU PID discovery, round-robin polling, capture orchestration |
-| `protocols` | Fixed command allowlist, positive Mode 01 matching, CAN/legacy single-frame parsing, bitmap semantics |
+| `adapter` | Single-worker lifetime, identity/configuration, per-ECU PID discovery, optional smooth weighted round-robin, capture orchestration |
+| `protocols` | Fixed command allowlist, positive and negative Mode 01 matching, CAN/legacy single-frame parsing, bitmap semantics |
 | `sensors` | Validated JSON registry, standard numeric decoders, units, provenance and verification |
 | `logging` | Per-session append-only raw JSONL; SQLite session metadata and separate decoded readings; exports |
 | `replay` | Streaming journal reader, truncated final-line recovery |
@@ -25,6 +25,12 @@ Each transaction receives a unique ID, UTC microsecond timestamp, monotonic nano
 
 Decode only if the response matches service/PID, the ECU independently advertises support and the standard layout/value validation passes. Never splice responses from separate ECUs. Headerless replies are labeled explicitly; they cannot establish physical ECU identity. A selected ECU drives the dashboard; raw logs retain every reply.
 
+Mode 01 `7F 01 NRC` replies are represented separately from positive sensor payloads. Transactions add `negative_responses` (ECU, service, NRC, reason code/text); `ECU_NEGATIVE_RESPONSE` can coexist with a valid reading from a different responding ECU. NRC 22 is Conditions Not Correct; other codes retain their numeric identity without guessing their meaning. A negative response identifies service 01, not a PID; the requested PID comes from the retained command. No negative payload enters a numeric decoder or support bitmap. These are additive journal fields; original raw bytes and schema-1 replay remain compatible. Legacy INVALID negative records are reclassified for display during replay only, with `original_status` retained.
+
+Each acquisition/replay context has an ID. Changing context clears GUI caches and rejects delayed preview events from the old context. Stop immediately suspends current coverage; worker acquisition events communicate paused/halted states separately from adapter connection. Freshness uses acquisition monotonic timestamps, not delayed GUI arrival. Replay intervals use recorded monotonic gaps, and replay is always displayed as offline evidence. NRC 22 stales all cached readings from the rejecting ECU; a subsequent success refreshes only that sensor. Nominal intervals reflect supported selected weights, while actual mean interval and maximum recent gap use up to 20 recorded success times per ECU/sensor.
+
+Priorities default off, with weights bounded to 1–4 and only code-allowlisted, selected, advertised-supported PIDs eligible. Smooth weighted round-robin prevents starvation; priority changes never alter the transport limiter or live policy. Three consecutive rejected/invalid transactions latch a polling halt; Resume cannot bypass it. Only explicit reconnect resets this halt.
+
 ## Storage and failure behavior
 
 The raw JSONL journal is appended, flushed and fsynced before decoded SQLite insertion. SQLite uses WAL and FULL synchronization with a commit per transaction. Raw journal schema version 1 is portable; decoded data reference session/transaction IDs. Power failure between journal and DB commit can lose a decoded row, which remains reproducible from raw bytes. The journal and SQLite are not one atomic transaction; this limitation is documented rather than hidden.
@@ -32,6 +38,8 @@ The raw JSONL journal is appended, flushed and fsynced before decoded SQLite ins
 Receive framing reads through the adapter prompt with a six-second outer deadline, short 50 ms reads and a 64 KiB raw cap. Incomplete reply/timeouts close the transport; no new request is sent into an unsynchronized byte stream. Invalid/NO DATA replies do not trigger an immediate retry. Three consecutive invalid ECU transactions stop polling. Reconnect is explicit. Storage errors surface through the event queue and close the transport rather than silently discarding capture.
 
 The recorder uses no unbounded queue. Disk work introduces backpressure directly in the serialized worker. Each receive buffer and UI preview is bounded; research preview is capped at 1,000 samples. Export streams CSV rows and JSONL lines. Long export/import scans currently run on the GUI thread, a known responsiveness limitation for future improvement.
+
+Stop polling and Stop Recording are independent serialized operations and may be submitted in either order. Disconnect/shutdown closes the recorder after the final in-flight transaction has been handled; raw journal counts and SQLite session end are finalized. An empty pre-connect recording is assigned the selected source on initialization. Reconnect closes a nonempty recording rather than relabeling captured simulation as live ECU data. CSV provenance comes from each stored reading's source mode, with explicit source kind. Replay cannot start a new acquisition recording.
 
 ## Replay and future clients
 
