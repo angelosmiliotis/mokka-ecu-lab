@@ -1,5 +1,7 @@
 """Constructed payloads only; no private route, session or raw-log fixtures."""
 import base64
+import csv
+import io
 import json
 import time
 import zipfile
@@ -11,6 +13,7 @@ from mokka_ecu_lab.layouts import layout_evidence
 from mokka_ecu_lab.protocols.isotp import parse_reply
 from mokka_ecu_lab.transport.simulator import Simulator,ALTERNATIVE_PAYLOADS,can_reply,DIESEL_PAYLOADS
 from mokka_ecu_lab.logging import list_sessions
+from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 from mokka_ecu_lab.logging.bundle import export_research_bundle
 from test_capture import evidence
 from test_discovery import fast_clock
@@ -20,7 +23,7 @@ from test_negative_responses import wait_event,shutdown
 def raw_evidence():
     support,pages,samples=evidence()
     for pid,payload in ALTERNATIVE_PAYLOADS.items():
-        samples['7E8',pid]=dict(framing_valid=True,payload_hex=payload.hex(' '),fields=[],error='unverified layout',
+        samples['7E8',pid]=dict(framing_valid=True,payload_hex=payload.hex(' '),fields=STANDARD_DIESEL[pid].decode(payload) if pid==0x88 else [],
                                **layout_evidence(pid,payload))
     return support,pages,samples
 
@@ -43,7 +46,7 @@ def test_raw_opt_in_requires_completed_discovery_own_support_and_complete_frame(
     assert not capture_plan(support,pages,samples,'7E8',prepared=True,selected=[],raw_selected=[0x88])['weights']
 
 
-@pytest.mark.parametrize('pid,length',[(0x7A,6),(0x88,13)])
+@pytest.mark.parametrize('pid,length',[(0x7A,6)])
 def test_alternative_iso_tp_shapes_never_produce_numeric_values(tmp_path,monkeypatch,pid,length):
     monkeypatch.setattr(AcquisitionWorker,'start',lambda self:None)
     w=AcquisitionWorker(tmp_path); w.support,w.support_pages,_=raw_evidence()
@@ -99,8 +102,10 @@ def test_raw_monitoring_and_nox_keep_session_bundle_and_replay_separation(tmp_pa
             observations=json.loads(z.read('raw-observations.json'))
             assert any(o['raw_only'] and o['data_length']==13 for o in observations)
             assert json.loads(z.read('session-summary.json'))['raw_only_samples']>=8
-            csv=z.read('measurements.csv'); assert b'sae_83_bank_1_sensor_1' in csv and b'sae_85_tank_level' in csv
-            assert b'sae_7a_' not in csv and b'sae_88_' not in csv
+            measurements=z.read('measurements.csv'); assert b'sae_83_bank_1_sensor_1' in measurements and b'sae_85_tank_level' in measurements
+            assert b'sae_7a_' not in measurements
+            raw_ids={r['id'] for r in map(json.loads,original.splitlines()) if r.get('raw_only')}
+            assert all(row['transaction_id'] not in raw_ids for row in csv.DictReader(io.StringIO(measurements.decode('utf-8-sig'))))
         records=[json.loads(line) for line in original.splitlines()]
         w.submit('replay',path=str(path)); wait_event(w,'connection',lambda s:s['ecu']=='Replay paused')
         for _ in records:

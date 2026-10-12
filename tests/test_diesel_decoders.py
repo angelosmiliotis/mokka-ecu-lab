@@ -72,7 +72,7 @@ def test_nox_pm_units_and_cumulative_time_are_not_soot_mass_or_time_since_regen(
 
 
 def test_scr_inducement_current_and_history_are_separate():
-    f=decoded(0x88,'81 12 48')
+    f=decoded(0x88,'81 12 48 00 01 00 02 00 03 00 04 00 05')
     assert f['active']['value']==1 and f['low_reagent']['value']==1
     values=list(f.values())[5:]
     assert [x['value'] for x in values[:8]]==[0,1,0,0,1,0,0,0]
