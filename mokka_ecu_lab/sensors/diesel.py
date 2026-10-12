@@ -24,6 +24,7 @@ class Field:
     value_bit: int | None = None
     signed: bool = False
     labels: tuple[str, str] | None = None
+    temporal_semantics: str | None = None
 
     def metadata(self):
         d = asdict(self)
@@ -33,6 +34,10 @@ class Field:
         d['support'] = f'A bit {self.support_bit}' if self.support_bit is not None else 'PID support; no field flag'
         d['formula'] = f'bit {self.value_bit}' if self.value_bit is not None else f'{"signed" if self.signed else "unsigned"} big-endian * {self.scale:g} + {self.offset:g}'
         d['validity'] = 'Complete documented layout; ECU PID support and field support flag when present'
+        if self.temporal_semantics:
+            d['encoded_range'] = [0, 1 if self.value_bit is not None else 65535]
+            d['sentinel'] = None
+            d['interpretation_limit'] = 'SCR inducement evidence; not DTC presence or overall system health. Historical blocks are not current faults.'
         return d
 
 
@@ -76,6 +81,18 @@ class DieselPID:
                                value=value, state='AVAILABLE' if supported else 'UNSUPPORTED_FIELD',
                                verification='STANDARD_DOCUMENTED', vehicle_verification='UNVERIFIED',
                                display=field.labels[int(value)] if value is not None and field.labels else value))
+        if self.pid == 0x88:
+            # B115 encodes 0..65535, with no missing-value sentinel. Its block
+            # algorithm describes 10,000 km rollover: report inconsistencies
+            # without silently clipping, replacing or rejecting encoded values.
+            counters = {f['id']: f['value'] for f in values if f['unit'] == 'km'}
+            warnings = []
+            if any(v > 10000 for v in counters.values()):
+                warnings.append('Counter exceeds nominal 10000 km block; independent verification required')
+            if counters['active_distance_current'] > counters['distance_current']:
+                warnings.append('Current active distance exceeds current total distance')
+            for value in values:
+                value['semantic_warnings'] = warnings
         return values
 
 
@@ -100,12 +117,18 @@ STANDARD_DIESEL = {
         Field('warning_time','Engine time in NOx warning mode',6,4,'s',support_bit=3)), 0xF0),
     # DashLogic has a mg/mm³ typo; primary SAE B113 explicitly specifies mg/m³.
     0x86: DieselPID(0x86, 'Particulate matter concentrations', 'Exhaust', 5, 'B113', pairs(['Bank 1 sensor 1','Bank 2 sensor 1'], 'mg/m³', .0125), 0xFC),
-    0x88: DieselPID(0x88, 'SCR inducement state and history', 'SCR/AdBlue', 3, 'B115', (
-        Field('active','Inducement active',0,1,'state',value_bit=7,labels=('Inactive','Active')),
-        *(Field(n,n.replace('_',' '),0,1,'state',value_bit=i) for i,n in enumerate(['low_reagent','incorrect_reagent','consumption_deviation','high_nox'])),
-        *(Field(f'history_{j}_{i}',f'{block} {n}',1+(j//2),1,'state',value_bit=(j%2)*4+i)
-          for j,block in enumerate(['0–10k km','10–20k km','20–30k km','30–40k km'])
-          for i,n in enumerate(['low reagent','incorrect reagent','consumption deviation','high NOx']))), 0x70),
+    0x88: DieselPID(0x88, 'SCR inducement state and history', 'SCR/AdBlue', 13, 'B115', (
+        Field('active','Current inducement active',0,1,'state',value_bit=7,labels=('Inactive','Active'),temporal_semantics='Current activation; A is zero when inactive'),
+        *(Field(n,'Current '+n.replace('_',' '),0,1,'state',value_bit=i,temporal_semantics='Reason for current activation only') for i,n in enumerate(['low_reagent','incorrect_reagent','consumption_deviation','high_nox'])),
+        *(Field(f'history_{j}_{i}',f'History block {j+1} {n}',1+(j//2),1,'state',value_bit=(j%2)*4+i,
+                temporal_semantics=f'Rolling block {j+1}: '+('current 10000 km accumulator' if j==0 else f'{j*10000}–{(j+1)*10000} km history')+'; latched reasons, not a current fault')
+          for j in range(4) for i,n in enumerate(['low reagent','incorrect reagent','consumption deviation','high NOx'])),
+        *(Field(n,label,start,2,'km',temporal_semantics=meaning) for n,label,start,meaning in (
+            ('active_distance_current','Active distance in current block',3,'Current block numerator; freezes while inactive'),
+            ('distance_current','Total distance in current block',5,'Current block denominator; rolls over at 10000 km'),
+            ('active_distance_block_2','Active distance in history block 2',7,'Previous completed block; denominator nominally 10000 km'),
+            ('active_distance_block_3','Active distance in history block 3',9,'Second previous completed block; denominator nominally 10000 km'),
+            ('active_distance_block_4','Active distance in history block 4',11,'Third previous completed block; denominator nominally 10000 km')))), 0x70),
     0x8B: DieselPID(0x8B, 'Diesel aftertreatment', 'DPF', 7, 'B118', (
         Field('regeneration','DPF regeneration in progress',1,1,'state',support_bit=0,value_bit=0,labels=('Not in progress','In progress')),
         Field('regeneration_type','DPF regeneration type',1,1,'state',support_bit=1,value_bit=1,labels=('Passive','Active')),
