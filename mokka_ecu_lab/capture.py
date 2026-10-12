@@ -5,7 +5,7 @@ from .sensors.diesel import STANDARD_DIESEL
 from .layouts import RAW_ONLY_PIDS, raw_eligibility
 
 DRIVE_WEIGHTS = {0x8B:4,0x7A:3,0x7C:2,0x78:2,0x0C:2,0x0D:2,0x05:1,0x10:1,0x85:1}
-DECODER_VERSION = 'SAE-OCT2011-v0.2.2'
+DECODER_VERSION = 'SAE-OCT2011-v0.2.3'
 
 
 def capture_plan(support, pages, observations, ecu, *, prepared=False, selected=None, raw_selected=()):

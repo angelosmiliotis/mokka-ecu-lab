@@ -19,7 +19,7 @@ def discovery_report(support, pages, observations, *, mode='Disconnected', conte
                             'UNKNOWN' if state == 'unknown' else
                             'NO_SUPPORTED_FIELDS' if fields else 'UNVERIFIED')
             if sample.get('error'): availability = 'INVALID / UNVERIFIED'
-            if sample.get('raw_only'): availability = 'RAW ONLY / DECODER UNVERIFIED'
+            if sample.get('raw_only'): availability = 'RAW ONLY / '+sample.get('layout_status','DECODER_UNVERIFIED')
             entries.append(dict(metadata, ecu=ecu, support=state.upper(), availability=availability,
                                 vehicle_verification='UNVERIFIED', sample=sample,
                                 evidence=sample.get('source_kind','NO_SAMPLE')))

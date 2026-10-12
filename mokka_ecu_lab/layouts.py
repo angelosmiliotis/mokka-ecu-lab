@@ -1,4 +1,4 @@
-"""Layout evidence only: alternative DPF/SCR layouts have no numeric decoder.
+"""Layout evidence: 13-byte B115 is documented; six-byte DPF remains unknown.
 
 Lengths identify a candidate shape, never a revision or a verified formula.
 Public fixtures are synthetic; private journals are not distributed.
