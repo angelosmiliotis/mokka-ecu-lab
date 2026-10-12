@@ -22,6 +22,8 @@ class SafeTransport:
     """All live writes pass policy here, even if the caller is faulty."""
     def __init__(self):
         self.supported: set[int] = set()
+        self.discovery_enabled = False
+        self.discovery_supported: set[int] = set()
         self.owner = threading.get_ident()
         self.last_send = 0.0
         self.rate = 4.0
@@ -30,7 +32,9 @@ class SafeTransport:
     def exchange(self, command: str, stop: threading.Event, timeout: float = 6.0) -> bytes:
         if threading.get_ident() != self.owner:
             raise RuntimeError("Transport belongs to one serialized worker")
-        command = validate_command(command, self.supported)
+        command = validate_command(command, self.supported,
+                                   discovery_enabled=self.discovery_enabled,
+                                   discovery_supported=self.discovery_supported)
         self.last_wire_ns = None
         if not 0.25 <= self.rate <= 4:
             raise ValueError("Total request rate must be between 0.25 and 4 Hz")
