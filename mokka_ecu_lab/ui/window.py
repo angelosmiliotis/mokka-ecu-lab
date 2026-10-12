@@ -19,7 +19,9 @@ from mokka_ecu_lab.transport.simulator import SCENARIOS
 from mokka_ecu_lab.logging import list_sessions, export_csv, export_jsonl
 from mokka_ecu_lab.analysis import interpretations, compare
 from mokka_ecu_lab.replay import Replay
-from mokka_ecu_lab.protocols import support_state
+from mokka_ecu_lab.protocols import support_state, DISCOVERY_PIDS
+from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
+from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.adapter.scheduling import priority_weights, nominal_interval
 
 STYLE = """
@@ -71,6 +73,11 @@ class MainWindow(QMainWindow):
         self.worker = AcquisitionWorker(root)
         self.readings, self.support, self.history, self.sensor_errors = {}, {}, {}, {}
         self.support_pages = {}
+        self.discovery_observations = {}
+        self.discovery_active = False
+        self.discovery_prepared = False
+        self.discovery_target = None
+        self.discovery_reason = 'No discovery started'
         self.raw_records = deque(maxlen=500)
         self.sessions = []
         self.recording_id = None
@@ -100,6 +107,7 @@ class MainWindow(QMainWindow):
         self.status.setWordWrap(True); layout.addWidget(self.status)
         self.tabs = QTabWidget(); layout.addWidget(self.tabs)
         self.build_dashboard(); self.build_sessions(); self.build_raw(); self.build_explorer(); self.build_research()
+        self.build_discovery()
         self.statusBar().showMessage("Ready. Select Simulation and Connect to develop without a vehicle.")
         self.timer = QTimer(self); self.timer.timeout.connect(self.drain); self.timer.start(100)
         self.refresh_sessions(); self.refresh_ports()
@@ -110,6 +118,11 @@ class MainWindow(QMainWindow):
         return b
 
     def send(self, action, **kwargs):
+        if action in {'discover','monitor_discovery'}:
+            self.user_paused = False
+        if action == 'discover': self.polling_active = False
+        if action in {'stop','disconnect','replay','shutdown','connect'}:
+            self.discovery_active = False
         if action in {"stop", "disconnect", "replay", "shutdown", "connect"}:
             self.polling_active = False
             self.user_paused = action != "connect"
@@ -231,7 +244,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(tab, "Dashboard")
 
     def update_language(self, enabled):
-        labels = ["Πίνακας", "Συνεδρίες", "Ακατέργαστα", "Αισθητήρες", "Έρευνα"] if enabled else ["Dashboard", "Sessions", "Raw Data", "Sensor Explorer", "Research"]
+        labels = ["Πίνακας", "Συνεδρίες", "Ακατέργαστα", "Αισθητήρες", "Έρευνα", "Ανακάλυψη"] if enabled else ["Dashboard", "Sessions", "Raw Data", "Sensor Explorer", "Research", "Discovery"]
         for i, label in enumerate(labels): self.tabs.setTabText(i, label)
         self.connect_button.setText("Σύνδεση" if enabled else "Connect")
         self.disconnect_button.setText("Αποσύνδεση" if enabled else "Disconnect")
@@ -483,6 +496,73 @@ class MainWindow(QMainWindow):
     def source_key(self):
         return self.ecu.currentData() or (next(iter(self.support), None))
 
+    def build_discovery(self):
+        tab = QWidget(); layout = QVBoxLayout(tab)
+        message = QLabel('Standard Mode 01 only. Start discovery explicitly for the selected ECU. Unsupported/unknown PIDs are never probed. Samples remain vehicle-unverified; OEM candidates are offline only.')
+        message.setWordWrap(True); layout.addWidget(message)
+        source_row = QHBoxLayout(); source_row.addWidget(QLabel('ECU:'))
+        self.discovery_ecu = QComboBox(); self.discovery_ecu.setModel(self.ecu.model())
+        self.discovery_ecu.currentIndexChanged.connect(self.ecu.setCurrentIndex)
+        self.ecu.currentIndexChanged.connect(self.discovery_ecu.setCurrentIndex)
+        source_row.addWidget(self.discovery_ecu,1)
+        self.discovery_filter = QComboBox(); self.discovery_filter.addItems(['All systems','Engine','DPF','Exhaust','SCR/AdBlue'])
+        self.discovery_filter.currentTextChanged.connect(self.update_discovery)
+        source_row.addWidget(self.discovery_filter); layout.addLayout(source_row)
+        row = QHBoxLayout()
+        self.discovery_start = self.button('Scan standard PIDs for selected ECU', lambda: self.send('discover', ecu=self.source_key()))
+        self.discovery_monitor = self.button('Monitor available standard PIDs', lambda: self.send('monitor_discovery', ecu=self.source_key()))
+        for w in (self.discovery_start,self.discovery_monitor,self.button('Stop',lambda:self.send('stop')),
+                  self.button('Export discovery report…',self.export_discovery)): row.addWidget(w)
+        layout.addLayout(row)
+        self.discovery_status = QLabel(); self.discovery_status.setWordWrap(True); layout.addWidget(self.discovery_status)
+        self.discovery_status.setMinimumHeight(64)
+        self.discovery_table = table(['System','Parameter / request','ECU','PID support','Availability','Evidence','Verification','Latest sample (UTC)'])
+        self.discovery_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for col,width in enumerate([100,290,100,110,155,160,175,200]): self.discovery_table.setColumnWidth(col,width)
+        self.discovery_table.itemSelectionChanged.connect(self.discovery_details)
+        layout.addWidget(self.discovery_table,1)
+        self.discovery_detail = QTextEdit(); self.discovery_detail.setReadOnly(True); self.discovery_detail.setMinimumHeight(160)
+        layout.addWidget(self.discovery_detail,1)
+        self.tabs.addTab(tab,'Discovery')
+        self.update_discovery()
+
+    def update_discovery(self, *args):
+        self.discovery_data = discovery_report(self.support,self.support_pages,self.discovery_observations,
+                                                mode=self.mode,context_id=self.context_id)
+        system = self.discovery_filter.currentText()
+        self.discovery_rows = [e for e in self.discovery_data['standard']+self.discovery_data['manufacturer_candidates']
+                               if system == 'All systems' or e['system']==system]
+        self.discovery_table.setRowCount(len(self.discovery_rows))
+        for row,e in enumerate(self.discovery_rows):
+            sample = e.get('sample',{})
+            update_row(self.discovery_table,row,[e['system'],e['name']+' / '+e['request'],e.get('ecu','Offline candidate'),
+                       e['support'],e.get('availability','RESEARCH_ONLY'),
+                       ('REPLAY · ' if sample.get('replay') else 'SAMPLE · ' if sample else '')+(e.get('evidence','NO_SAMPLE') if 'sample' in e else 'RESEARCH_ONLY'),
+                       e['verification']+' / vehicle UNVERIFIED',sample.get('timestamp','—')])
+        counts = {s:sum(e.get('availability')==s for e in self.discovery_data['standard'])
+                  for s in ('AVAILABLE','UNSUPPORTED','UNKNOWN','UNVERIFIED','NO_SUPPORTED_FIELDS','INVALID / UNVERIFIED')}
+        self.discovery_status.setText(f'ECU selected: {self.source_key() or "—"} | {self.mode} | {self.discovery_reason} | '+
+                                      ', '.join(f'{s}: {n}' for s,n in counts.items()))
+        allowed = self.connected and self.mode != 'REPLAY' and not self.requires_reconnect and not self.discovery_active
+        self.discovery_start.setEnabled(allowed)
+        self.discovery_monitor.setEnabled(allowed and self.discovery_prepared and self.source_key()==self.discovery_target)
+        self.discovery_details()
+
+    def discovery_details(self):
+        row = self.discovery_table.currentRow()
+        if 0 <= row < len(getattr(self,'discovery_rows',[])):
+            self.discovery_detail.setPlainText(json.dumps(self.discovery_rows[row],ensure_ascii=False,indent=2))
+        else: self.discovery_detail.setPlainText('Select a parameter for its raw payload, fields, support flags, formula, units, edition, source links and verification evidence. OEM requests have no transmit control.')
+
+    def export_discovery(self):
+        path,_ = QFileDialog.getSaveFileName(self,'Export discovery evidence',str(self.root/'discovery-report.json'),'JSON (*.json)')
+        if path:
+            try:
+                self.update_discovery()
+                Path(path).write_text(json.dumps(self.discovery_data,ensure_ascii=False,indent=2),encoding='utf-8')
+                self.notice('Discovery report exported; timestamps and source evidence retained. Vehicle verification remains pending.')
+            except Exception as exc: self.notice(str(exc))
+
     def update_measurements(self):
         source = self.source_key()
         checked = [self.sensor_list.item(i) for i in range(self.sensor_list.count())
@@ -492,6 +572,10 @@ class MainWindow(QMainWindow):
         weights = priority_weights([i.data(Qt.ItemDataRole.UserRole) for i in checked
                                     if i.data(Qt.ItemDataRole.UserRole) in self.support.get(source, set())],
                                    self.priorities if self.use_priorities.isChecked() else {})
+        schedule_weights = dict(weights)
+        if self.discovery_active and self.polling_active:
+            schedule_weights.update(priority_weights(DISCOVERY_PIDS & self.support.get(self.discovery_target,set()),
+                                                     {},allow_discovery=True))
         current, states = 0, {}
         for index, item in enumerate(checked):
             pid = item.data(Qt.ItemDataRole.UserRole); sensor = self.registry[pid]
@@ -507,7 +591,7 @@ class MainWindow(QMainWindow):
             if error and state != "Not supported": state = "ECU rejected / unavailable" if "7F 01" in error else "Invalid / unavailable"
             if reading:
                 age = now - reading["received_at"]
-                expected = nominal_interval(pid, weights, self.rate.value()) if pid in weights else 0
+                expected = nominal_interval(pid, schedule_weights, self.rate.value()) if pid in weights else 0
                 threshold = max(5., expected * 2.5)
                 replay = reading["mode"].startswith("REPLAY")
                 evidence = ("REPLAY · " if replay else "") + reading.get("source_kind", "UNKNOWN")
@@ -541,7 +625,7 @@ class MainWindow(QMainWindow):
         for row, sensor in enumerate(self.registry.values()):
             reading = self.readings.get((source, sensor.pid))
             verification = "UNSUPPORTED" if source in self.support and support_state(self.support[source], self.support_pages.get(source, set()), sensor.pid) == "unsupported" else sensor.metadata["verification"]
-            nominal = f"{nominal_interval(sensor.pid, weights, self.rate.value()):.2f} s nominal" if sensor.pid in weights else "Not scheduled"
+            nominal = f"{nominal_interval(sensor.pid, schedule_weights, self.rate.value()):.2f} s nominal" if sensor.pid in weights else "Not scheduled"
             for col, val in [(3, source or "—"), (7, nominal),
                              (8, verification), (9, f'{reading["value"]:.3f}' if reading else "—"), (10, reading["timestamp"] if reading else "—"),
                              (11, states.get(sensor.pid, "Not selected / last evidence only"))]:
@@ -557,6 +641,9 @@ class MainWindow(QMainWindow):
                 self.context_id, self.mode = value["id"], value["mode"]
                 self.readings.clear(); self.history.clear(); self.sensor_errors.clear()
                 self.support.clear(); self.support_pages.clear()
+                self.discovery_observations.clear(); self.discovery_active = False
+                self.discovery_prepared = False; self.discovery_target = None
+                self.discovery_reason = 'New connection/replay context; no discovery evidence'
                 self.ecu.clear(); self.ecu.addItem("Automatic first responding ECU", "")
                 self.rejection_reason.clear()
                 self.polling_active = False
@@ -567,6 +654,12 @@ class MainWindow(QMainWindow):
                 self.polling_active = value["polling"] and not self.user_paused
                 self.acquisition_reason = value["reason"]
                 self.requires_reconnect = value["requires_reconnect"]
+                if not self.polling_active and not self.discovery_active:
+                    self.discovery_reason = 'Polling stopped; latest samples are recorded evidence'
+            elif kind == 'discovery':
+                if value.get('context_id') != self.context_id: continue
+                self.discovery_active = value['active']; self.discovery_reason = value['reason']
+                self.discovery_prepared = value.get('prepared',False); self.discovery_target = value.get('target')
             elif kind == "connection":
                 self.mode = value["mode"]
                 self.connected = value["ecu"] == "Connected"
@@ -593,28 +686,45 @@ class MainWindow(QMainWindow):
                     source = reading["ecu"] or "headerless"
                     if self.ecu.findData(source) < 0: self.ecu.addItem(source, source)
                     if not self.source_key(): self.ecu.setCurrentIndex(self.ecu.findData(source))
+                    if reading['pid'] in STANDARD_DIESEL: continue
                     key = source, reading["pid"]
                     replay = record.get("replay", False)
                     sent_at = reading["monotonic_ns"] / 1e9
                     self.readings[key] = dict(reading, received_at=time.monotonic() if replay else sent_at, invalid=False)
                     self.sensor_errors.pop(key, None)
                     self.history.setdefault(key, deque(maxlen=20)).append(sent_at)
+                    self.discovery_observations[key] = {'ecu':reading['ecu'],'pid':reading['pid'],
+                        'fields':[dict(state='AVAILABLE',name=self.registry[reading['pid']].name,value=reading['value'],unit=self.registry[reading['pid']].unit)],
+                        'timestamp':reading['timestamp'],'source_kind':reading.get('source_kind','UNKNOWN'),'replay':replay}
+                for sample in record.get('discovery_samples',[]):
+                    self.discovery_observations[sample['ecu'] or 'headerless',sample['pid']] = sample
+                for problem in record.get('protocol_errors',[]):
+                    source = problem['ecu'] or 'unknown'
+                    if record.get('pid'):
+                        pid = int(record['pid'],16)
+                        self.sensor_errors[source,pid] = problem['reason']
+                        if (source,pid) in self.readings: self.readings[source,pid]['invalid'] = True
+                        previous = self.discovery_observations.get((source,pid),{})
+                        self.discovery_observations[source,pid] = dict(previous,error=problem['reason'])
                 for rejection in record.get("negative_responses", []):
                     source = rejection["ecu"] or "headerless"
                     reason = f'{source}: {rejection["reason"]} (7F 01 {rejection["nrc"]})'
                     self.rejection_reason.setText(("Recorded " if record.get("replay") else "ECU rejection: ") + reason + "; not a transport timeout. Ignition state is not confirmed.")
                     if record.get("pid"):
                         pid = int(record["pid"], 16)
+                        previous = self.discovery_observations.get((source,pid),{})
+                        self.discovery_observations[source,pid] = dict(previous,error=reason)
                         self.sensor_errors[source, pid] = reason
                         for (ecu, p), reading in self.readings.items():
                             if ecu == source and (p == pid or rejection["nrc"] == "22"):
                                 reading["stale_reason"] = reason
-                if record["status"] in {"INVALID", "TRANSPORT_ERROR"} and record.get("pid"):
+                if record["status"] in {"INVALID", "TRANSPORT_ERROR"} and not record.get('protocol_errors') and record.get("pid"):
                     pid = int(record["pid"], 16)
                     for source in self.support: self.sensor_errors[source, pid] = record["error"]
                     for (source, p), reading in self.readings.items():
                         if p == pid: reading["invalid"] = True
         self.update_measurements()
+        self.update_discovery()
         duration = time.monotonic() - self.recording_started if self.recording_started else 0
         self.stats.setText(f'Recording: {self.recording_id[:12] if self.recording_id else "off"}  {duration:.1f}s   |   Requests: {self.request_count}   |   Errors: {self.error_count}   |   Dropped UI previews: {self.worker.dropped}')
         self.record_button.setEnabled(not self.recording_id)
