@@ -27,6 +27,8 @@ class Field:
 
     def metadata(self):
         d = asdict(self)
+        if self.id == 'warning_time':
+            d['interpretation_limit'] = 'Engine-time counter; a static or nonzero value alone does not establish a current SCR warning or fault.'
         d['layout'] = ','.join(chr(65+i) for i in range(self.start, self.start+self.size))
         d['support'] = f'A bit {self.support_bit}' if self.support_bit is not None else 'PID support; no field flag'
         d['formula'] = f'bit {self.value_bit}' if self.value_bit is not None else f'{"signed" if self.signed else "unsigned"} big-endian * {self.scale:g} + {self.offset:g}'
