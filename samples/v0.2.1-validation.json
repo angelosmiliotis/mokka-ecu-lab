@@ -50,7 +50,7 @@
   "manufacturer_live_enabled": false,
   "scope": "OFFLINE_ONLY",
   "rate": "4 application commands/s aggregate",
-  "pid88_layout": "SAE OCT2011, 3 data bytes only",
+  "pid88_layout": "Historical implementation incorrectly accepted 3 bytes; corrected in v0.2.3 to SAE OCT2011 B115, 13 data bytes",
   "native_screenshot": "release/v0.2.1-delivery-validation/drive-capture.png",
   "packaged_smoke": {
     "exit_code": 0,

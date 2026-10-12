@@ -16,7 +16,7 @@
     "failed": 0
   },
   "scope": "OFFLINE_ONLY",
-  "pid88_layout": "SAE OCT2011, 3 data bytes only",
+  "pid88_layout": "Historical implementation incorrectly accepted 3 bytes; corrected in v0.2.3 to SAE OCT2011 B115, 13 data bytes",
   "rate": "4 application commands/s aggregate",
   "native_report": "release/v0.2.0-validation-final/discovery-report.json",
   "native_screenshot": "release/v0.2.0-validation-final/discovery.png",
