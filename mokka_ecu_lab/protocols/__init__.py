@@ -27,6 +27,14 @@ def validate_command(command: str, supported: set[int] | None = None) -> str:
 class Response:
     header: str | None
     data: bytes
+    negative_code: int | None = None
+
+    def rejection(self) -> dict:
+        if self.negative_code is None:
+            raise ValueError("Positive response is not a rejection")
+        return {"ecu": self.header, "service": "01", "nrc": f"{self.negative_code:02X}",
+                "reason_code": "CONDITIONS_NOT_CORRECT" if self.negative_code == 0x22 else "ECU_REJECTION",
+                "reason": "Conditions Not Correct" if self.negative_code == 0x22 else f"ECU rejection NRC 0x{self.negative_code:02X}"}
 
 def parse_obd(raw: bytes, pid: int, command: str = "") -> list[Response]:
     """Single-frame J1979 replies: bare, CAN 11/29-bit (optional DLC), legacy headers.
@@ -64,17 +72,22 @@ def parse_obd(raw: bytes, pid: int, command: str = "") -> list[Response]:
         if header is not None:
             if not data:
                 continue
-            if data[0] != 0x41:
+            if data[0] not in {0x41, 0x7F}:
                 if data[0] >> 4 != 0 or not 2 <= data[0] <= 7 or len(data) < data[0] + 1:
                     continue
                 data = data[1:1 + data[0]]
-        elif len(data) >= 5 and data[3:5] == bytes([0x41, pid]):
+        elif len(data) >= 6 and data[3:5] in {bytes([0x41, pid]), b"\x7f\x01"}:
             # ISO 9141/KWP three-byte header and trailing checksum.
             header, data = data[:3].hex(' ').upper(), data[3:-1]
+        elif len(data) >= 4 and 2 <= data[0] <= 7 and len(data) >= data[0] + 1:
+            # Headerless single-frame replies with a length byte.
+            data = data[1:1 + data[0]]
         if data[:2] == bytes([0x41, pid]):
             responses.append(Response(header, data[2:]))
+        elif len(data) == 3 and data[:2] == b"\x7f\x01":
+            responses.append(Response(header, data, data[2]))
     if not responses:
-        raise ValueError("No matching positive Mode 01 response")
+        raise ValueError("No matching Mode 01 response")
     return responses
 
 def supported_pids(payload: bytes, base: int) -> set[int]:
