@@ -1,4 +1,10 @@
-# v0.2.3 Drive Capture operator guide
+# v0.2.4 Drive Capture and offline report operator guide
+
+## Offline evidence/report workflow
+
+No new road test is needed for this release. Open Research → Offline evidence analyzer → Import local Research Bundles and select the old ZIP. Legacy eleven-file bundles retain their full raw journal. Choose the session/ECU/source; Compatibility separates recorded snapshot support from raw bitmap support and actual positive samples. An unanchored four-byte bitmap is valid with missing provenance; a zero-sample PID is NOT OBSERVED.
+
+SCR / AdBlue summary describes current state at recorded acquisition time, historical flags separately and exact SAE kilometre blocks. It establishes no current vehicle-health verdict. Export private research report writes full private JSON plus optional compact HTML for the selected group. Open HTML locally in a browser. Detailed raw preview/timestamps require the unchecked explicit option. Choose fresh names and review both files before sharing. Saved older analysis JSON can be opened, but original ZIP re-import is needed for corrected bitmap classifications. See [v0.2.4 evidence and schema notes](research/v0.2.4-evidence-reports.md).
 
 ## RAW-only and NOx opt-ins
 
@@ -37,7 +43,7 @@ The corrected OCT2011 decoder limits are: PID 88 accepts exactly 13 data bytes (
 
 ## Research Bundle contents and privacy
 
-v0.2.3 adds **raw-observations.json** to the eleven original files: 017A/0188 payloads, validity/layout/source evidence, RAW-only flag and recorded cached context. The ZIP now has twelve files; SHA256SUMS covers every content file and manifest. Legacy journals can expose raw candidate bytes without inventing absent RPM/speed context. Raw observations remain private diagnostic data; export never uploads them.
+v0.2.2 added **raw-observations.json** to the eleven original files: 017A/0188 payloads, validity/layout/source evidence, RAW-only flag and recorded cached context. The ZIP now has twelve files; SHA256SUMS covers every content file and manifest. Legacy journals can expose raw candidate bytes without inventing absent RPM/speed context. Raw observations remain private diagnostic data; export never uploads them.
 
 The ZIP contains redacted raw JSONL, decoded CSV, Discovery report, session summary (start/end/duration, versions, transaction/sent-request counts, weights), supported/unsupported/unknown PID summary, ECU response identifiers, observed per-PID/per-field sample counts and intervals, communication/decoding errors, markers, a manifest and SHA256SUMS.txt. Checksums cover all other files including the manifest; the checksum file cannot hash itself. Unknown recording/decoder versions and absent discovery evidence are listed in the manifest instead of invented. Legacy recordings remain exportable with those limitations.
 
@@ -45,6 +51,6 @@ Original raw journals are unchanged. Adapter/port identity and ATI/STI identific
 
 ## Reproduction
 
-For v0.2.3, `scripts/verify_raw_capture.py --output-dir release/v0.2.3-validation` exercises constructed alternative shapes, unchecked no-send opt-ins, NOx monitoring, raw/numeric separation, closed bundle checksums and GUI source-separated trends. All evidence from this script is SIMULATED. Portable software summary: `samples/v0.2.3-validation.json`. The older capture script below continues to exercise documented numeric layouts.
+For v0.2.4, `scripts/verify_raw_capture.py --output-dir release/v0.2.4-validation` exercises constructed alternative shapes, unchecked no-send opt-ins, NOx monitoring, raw/numeric separation, closed bundle checksums and GUI source-separated trends. All evidence from this script is SIMULATED. Portable software summary: `samples/v0.2.4-validation.json`. The older capture script below continues to exercise documented numeric layouts.
 
 Run `python -m pytest -q` in the project environment. `scripts/verify_capture.py --output-dir release/v0.2.1-validation-final` runs the native Windows simulator through recording, discovery, preset preparation, weighted monitoring, all three marker types, Finish/Disconnect and the actual GUI bundle action. It checks recording continuity, seven focused rows, original raw preservation and every file checksum. The portable result is `samples/v0.2.1-validation.json`. Packaging occurs only after software tests pass; no result is a physical vehicle validation claim.

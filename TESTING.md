@@ -1,5 +1,16 @@
 # Testing and vehicle validation
 
+## Version 0.2.4 software validation
+
+**345 tests passed** in the complete regression run on 13 October 2026 (105.69 s). New minimal constructed bundles cover separate recorded/raw support, agreeing/conflicting snapshots, ordered and cross-ECU bitmap propagation, missing predecessor evidence, wrong lengths, malformed/negative replies, zero-sample NOT_OBSERVED states, legacy eleven-file inputs and additive old-analysis compatibility. SCR checks separate inactive-at-recorded-time from latched history, reject absent/invalid latest state, preserve all five counters and avoid diagnosis/consumption claims for quantized tank levels, static warning time or one NOx sample.
+
+Private export tests check HTML escaping, identity-field/timeline exclusions, detailed opt-in, no external resource tags, restricted CSP, fresh atomic filenames and preservation of imported/saved files. GUI tests verify separate Compatibility columns, SCR summary, JSON/HTML export and saved-analysis loading without worker submissions.
+
+The native Windows simulator passed twice, including a 1320×860 rendering within 1080p: seven main tabs, two source groups, one expected six-byte 017A Discovery mismatch, zero monitoring errors, RAW-only weight 1, repeated NOx, closed same recording, twelve bundle checksums, unchanged original raw journal and six trends. Research import, recorded/raw support, unobserved states, unanchored bitmap states, SCR summary and compact private HTML/JSON export passed. Screenshots under ignored release/v0.2.4-native-1080p were inspected. Synthetic HTML was also opened and visually checked in the browser. No private input was used in these software/UI tests.
+
+Live protocol/allowlists, transport, worker, scheduler, logging and numeric SAE decoder files are byte-for-byte unchanged from v0.2.3. Existing read-only and measured timing regressions still pass. A separate private local acceptance check confirmed the requested evidence fixes without altering the original ZIP; private reports stay outside GitHub. The packaged Windows executable passed startup/record/close (exit 0, 11 requests, zero errors, one closed session). Its headless analyzer exited 0; JSON and HTML exactly matched source output for a constructed simulator bundle. Portable evidence: samples/v0.2.4-validation.json. No physical ECU/DPF verification is claimed. See [schema and report operator notes](research/v0.2.4-evidence-reports.md).
+
+
 ## Version 0.2.3 final software validation
 
 **322 tests passed** in the final full regression run on 13 October 2026. New constructed fixtures cover every B115 current/history flag, five unsigned big-endian counters, reserved bits, inactive/current contradictions, wrong lengths including legacy three-byte replies, encoded maximum without invented sentinel, semantic counter warnings, cross-ECU framing isolation, numeric monitoring and RAW-only override. Legacy replay retains original bytes without validating its obsolete decoder. Six-byte 017A stays fail-closed; existing NOx/AdBlue, read-only command rejection and measured aggregate timing remain covered.

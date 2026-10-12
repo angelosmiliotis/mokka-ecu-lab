@@ -1,4 +1,10 @@
 # Read-only safety boundary
+## v0.2.4 evidence and private reports
+
+Only offline research/UI/report code changes in this release. Live parser, command allowlists, worker, serialized transport, polling scheduler, aggregate 4 req/s limit and numeric SAE decoders remain unchanged. Recorded snapshots never become raw bitmap authority. A positive reply proves observation only; no-sample PIDs are NOT_OBSERVED. Unanchored four-byte bitmaps retain valid framing and UNKNOWN raw support. Conflicting chains are quarantined, not combined. SCR summaries refer to acquisition time, separate latched history, and keep independent verification UNVERIFIED. No pressure/health inference is added for six-byte 017A.
+
+Private exports make no network requests. Compact HTML omits identity fields and raw timelines; detailed raw preview requires an explicit checkbox/CLI flag. Full JSON retains private evidence. Review both files before sharing. Fresh atomic destinations preserve imports and previous reports. No upload/cloud/backend is introduced; private input and acceptance reports remain outside Git. See [report workflow and compatibility](research/v0.2.4-evidence-reports.md).
+
 ## v0.2.3 correction and offline research
 
 0188 uses the exact 13-data-byte SAE OCT2011 B115 definition, with 26 fields covering current flags, latched history and five distance counters. The old three-byte label was wrong. Six-byte 017A remains UNVERIFIED_LAYOUT. RAW-only disables numeric output even for a documented response. The local catalog and evidence analyzer never configure transport permissions or promote hypotheses. No new vehicle queries or backend exist. See [sources, limits and workflow](research/v0.2.3-offline-engine.md).

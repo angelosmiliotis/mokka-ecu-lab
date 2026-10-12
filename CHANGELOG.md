@@ -1,5 +1,14 @@
 # Changes
 
+## 0.2.4 — Evidence fidelity and private offline reports
+
+- Separate recorded Discovery support, reconstructed raw bitmap support, complete positive sample counts and per-PID observation provenance. Keep legacy `support` raw-only. Preserve and explain snapshot/raw contradictions without promotion.
+- Validate bitmap length independently of ordered predecessor/continuation provenance. Four-byte unanchored pages are BITMAP_VALID_UNANCHORED, not decoder layout errors; conflicting pages quarantine descendants. Defined zero-sample PIDs show NOT_OBSERVED.
+- Add source-specific recorded-time SCR current/history/counter summaries, AdBlue quantization/static-counter limits and NOx sample-count limits using the existing SAE decoder. No absent reply becomes inactive/healthy.
+- Export fresh private JSON plus optional self-contained escaped HTML with no external resources. Compact HTML omits identity/raw timelines; detailed previews require explicit opt-in. Read older schema-1 analyses additively and require original ZIP re-import for current bitmap analysis.
+- Add resizable/scrolling Compatibility details and an offline next-recording checklist. Live requests, worker, protocol/allowlists, 4 req/s cap and OEM research-only boundary stay unchanged.
+
+
 ## 0.2.3
 
 - Corrected OCT2011 B115 PID 88 to exactly 13 data bytes: current activation/reasons, four latched history blocks and five unsigned kilometre counters. Three-byte layouts are unverified; RAW-only remains an optional numeric bypass. Counter anomalies are surfaced without clipping or inventing sentinels. Vehicle verification stays UNVERIFIED.

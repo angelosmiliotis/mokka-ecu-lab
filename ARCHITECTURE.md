@@ -1,4 +1,8 @@
 # Architecture
+
+## v0.2.4 offline evidence fidelity
+
+Research isolates valid bitmap length from ordered chain provenance, keeps recorded snapshots separate from raw support and counts positive observation per PID. Conflicting pages quarantine descendant support. Analysis schema 1 adds revision 2 fields without redefining legacy support. `research/summary.py` aggregates decoded fields from the existing code-owned SAE definition; `research/report.py` reads older analyses and atomically exports full private JSON plus optional escaped, self-contained HTML. Compact HTML excludes identity/raw timelines; detailed preview is explicit. No research module holds a worker/transport. Protocol, allowlists, numeric decoders and scheduler are unchanged. See [schema and operator notes](research/v0.2.4-evidence-reports.md).
 ## v0.2.3 correction and offline research
 
 0188 uses the exact 13-data-byte SAE OCT2011 B115 definition, with 26 fields covering current flags, latched history and five distance counters. The old three-byte label was wrong. Six-byte 017A remains UNVERIFIED_LAYOUT. RAW-only disables numeric output even for a documented response. The local catalog and evidence analyzer never configure transport permissions or promote hypotheses. No new vehicle queries or backend exist. See [sources, limits and workflow](research/v0.2.3-offline-engine.md).
