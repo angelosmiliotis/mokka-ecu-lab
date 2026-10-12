@@ -1,12 +1,12 @@
 """Optional weighted scheduling; the transport remains the rate/policy boundary."""
-from mokka_ecu_lab.protocols import LIVE_PIDS
+from mokka_ecu_lab.protocols import LIVE_PIDS, DISCOVERY_PIDS
 
 
-def priority_weights(pids, priorities=None):
+def priority_weights(pids, priorities=None, *, allow_discovery=False):
     # Never let scheduling admit new requests, duplicates or an unbounded weight.
     priorities = priorities or {}
     return {pid: max(1, min(4, int(priorities.get(pid, 1))))
-            for pid in dict.fromkeys(pids) if pid in LIVE_PIDS}
+            for pid in dict.fromkeys(pids) if pid in (LIVE_PIDS | DISCOVERY_PIDS if allow_discovery else LIVE_PIDS)}
 
 
 def nominal_interval(pid, weights, rate):
@@ -19,8 +19,8 @@ class PollScheduler:
         self.weights = {}
         self.scores = {}
 
-    def next(self, pids, priorities=None):
-        weights = priority_weights(pids, priorities)
+    def next(self, pids, priorities=None, *, allow_discovery=False):
+        weights = priority_weights(pids, priorities, allow_discovery=allow_discovery)
         if weights != self.weights:
             self.weights = weights
             self.scores = dict.fromkeys(weights, 0)
