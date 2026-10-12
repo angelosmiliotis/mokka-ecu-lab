@@ -30,7 +30,7 @@ def test_bundle_closed_session_integrity_privacy_intervals_and_original_unchange
     assert recorder.path.read_bytes()==original and manifest['redacted']
     with zipfile.ZipFile(tmp_path/'bundle.zip') as z:
         assert {'raw-redacted.jsonl','measurements.csv','discovery-report.json','session-summary.json','pid-support.json',
-                'ecu-identifiers.json','polling-statistics.json','errors.json','markers.json','manifest.json','SHA256SUMS.txt'}==set(z.namelist())
+                'ecu-identifiers.json','polling-statistics.json','errors.json','markers.json','raw-observations.json','manifest.json','SHA256SUMS.txt'}==set(z.namelist())
         for line in z.read('SHA256SUMS.txt').decode().splitlines():
             expected,name=line.split('  '); assert hashlib.sha256(z.read(name)).hexdigest()==expected
         for name in z.namelist():
@@ -68,7 +68,8 @@ def test_bundle_uses_stored_session_discovery_not_current_connection(tmp_path,fa
             assert row['sample']['fields'][2]['value']==80 and row['support']=='SUPPORTED'
             summary=json.loads(z.read('session-summary.json'))
             assert summary['capture_weights']=={'139':4,'122':3,'133':1}
-            assert summary['application_versions']==['0.2.1']
+            from mokka_ecu_lab import __version__
+            assert summary['application_versions']==[__version__]
             assert json.loads(z.read('polling-statistics.json'))['7E8:85']['decoded_samples']>=4
     finally: shutdown(w)
 
