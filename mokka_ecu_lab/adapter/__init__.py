@@ -17,6 +17,7 @@ from mokka_ecu_lab.logging import Recorder, utc_now
 from mokka_ecu_lab.replay import Replay
 from .scheduling import PollScheduler
 from mokka_ecu_lab.capture import capture_plan, DECODER_VERSION
+from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, layout_evidence
 from mokka_ecu_lab import __version__
 
 class AcquisitionWorker(threading.Thread):
@@ -40,6 +41,7 @@ class AcquisitionWorker(threading.Thread):
         self.discovery_completed = False
         self.capture_mode = False
         self.capture_weights = {}
+        self.capture_raw_pids = set()
         self.can_protocol = False
         self.polling = False
         self.priorities = {}
@@ -108,10 +110,12 @@ class AcquisitionWorker(threading.Thread):
                         continue
                     parsed.append({"ecu": reply.header, "data_hex": reply.data.hex(' ').upper()})
                     if pid in STANDARD_DIESEL:
-                        sample = self.diesel_sample(reply, pid, stamp, sent_ns)
+                        sample = self.diesel_sample(reply, pid, stamp, sent_ns,
+                                                    raw_only=self.capture_mode and pid in self.capture_raw_pids)
                         discovery_samples.append(sample)
                         if sample.get('error'):
-                            protocol_errors.append({'ecu':reply.header, 'reason':sample['error'], 'state':'INVALID'})
+                            protocol_errors.append({'ecu':reply.header, 'reason':sample['error'], 'state':'INVALID',
+                                                    'category':'DECODER_LAYOUT'})
                         else:
                             readings.extend(self.diesel_readings(sample, pid, stamp, sent_ns))
                     if pid in self.registry:
@@ -151,6 +155,8 @@ class AcquisitionWorker(threading.Thread):
                     fields=[dict(sensor_id=sensor.id,name=sensor.name,value=reading['value'],unit=sensor.unit,state='AVAILABLE')])
         for sample in discovery_samples:
             sample['timestamp'], sample['monotonic_ns'] = stamp, sent_ns
+            if sample.get('raw_only'):
+                sample['context_readings'] = self.raw_context(sample['ecu'] or 'headerless', sent_ns)
             self.discovery_observations[sample['ecu'] or 'headerless', int(command[2:],16)] = sample
         record = {"id": uuid.uuid4().hex, "timestamp": stamp, "monotonic_ns": sent_ns,
             "port": self.port, "adapter": self.adapter, "protocol": self.protocol, "mode": self.mode,
@@ -165,6 +171,8 @@ class AcquisitionWorker(threading.Thread):
             "protocol_errors": protocol_errors, "discovery_samples": discovery_samples,
             "verification": [r["verification"] for r in readings], "error": error}
         record.update(application_version=__version__,decoder_version=DECODER_VERSION)
+        record['raw_only'] = bool(self.capture_mode and command.startswith('01') and int(command[2:],16) in self.capture_raw_pids)
+        record['raw_samples'] = [s for s in discovery_samples if s.get('raw_only')]
         if command.startswith('01') and int(command[2:],16) in DISCOVERY_PIDS:
             record['support_evidence'] = {e:sorted(p) for e,p in self.support.items()}
             record['support_pages'] = {e:sorted(p) for e,p in self.support_pages.items()}
@@ -176,14 +184,33 @@ class AcquisitionWorker(threading.Thread):
         if status == "CANCELLED": raise Cancelled(error, raw)
         return record
 
-    def diesel_sample(self, reply, pid, stamp, sent_ns, replay_mode=None):
+    def raw_context(self, ecu, sent_ns):
+        context = {}
+        for pid, name in ((0x0C,'rpm'),(0x0D,'speed')):
+            sample = self.discovery_observations.get((ecu,pid),{})
+            field = next((f for f in sample.get('fields',[]) if f.get('state')=='AVAILABLE'),None)
+            if field and not sample.get('error') and sample.get('monotonic_ns',sent_ns+1)<=sent_ns:
+                context[name] = dict(value=field['value'],unit=field['unit'],ecu=ecu,
+                    timestamp=sample['timestamp'],monotonic_ns=sample['monotonic_ns'],
+                    age_seconds=(sent_ns-sample['monotonic_ns'])/1e9,source_kind=sample['source_kind'],
+                    simultaneous=False)
+            else: context[name] = dict(value=None,state='UNAVAILABLE',simultaneous=False)
+        return context
+
+    def diesel_sample(self, reply, pid, stamp, sent_ns, replay_mode=None, raw_only=False):
         sample = {'ecu':reply.header, 'pid':pid, 'payload_hex':reply.data.hex(' ').upper(),
                   'timestamp':stamp, 'monotonic_ns':sent_ns,
                   'source_kind':'SIMULATED' if (replay_mode or self.mode) == 'SIMULATED' else 'ECU_READING' if (replay_mode or self.mode).startswith('LIVE') else 'UNKNOWN',
-                  'replay':replay_mode is not None, 'fields':[]}
+                  'replay':replay_mode is not None, 'fields':[], 'framing_valid':True,
+                  **layout_evidence(pid,reply.data)}
         source = reply.header or 'headerless'
         if pid not in self.support.get(source, set()):
             sample['not_decoded'] = 'No ECU-specific support evidence; payload retained without measurements'
+            sample['layout_status'] = 'NO_SUPPORT_EVIDENCE'
+            return sample
+        if raw_only and pid in RAW_ONLY_PIDS:
+            sample.update(raw_only=True,acquisition='RAW ONLY / DECODER UNVERIFIED',
+                          numeric_decoder_enabled=False)
             return sample
         try: sample['fields'] = STANDARD_DIESEL[pid].decode(reply.data)
         except ValueError as exc: sample['error'] = str(exc)
@@ -198,11 +225,13 @@ class AcquisitionWorker(threading.Thread):
         if not problems and record['status'] in {'INVALID','TRANSPORT_ERROR','CANCELLED'}:
             problems = [dict(ecu=self.discovery_target,reason=record['error'])]
         for problem in problems:
-            source = problem['ecu'] or 'unknown'
+            source = problem['ecu'] or (self.discovery_target if self.capture_mode else None) or 'unknown'
             sample = dict(self.discovery_observations.get((source,pid),{}),
-                          ecu=problem['ecu'],pid=pid,error=problem['reason'],
+                          ecu=problem['ecu'] or (source if source!='unknown' else None),pid=pid,error=problem['reason'],
                           error_timestamp=record['timestamp'],raw_b64=record['raw_b64'],
                           replay=record.get('replay',False),source_kind=record.get('source_kind','UNKNOWN'))
+            if problem.get('category')!='DECODER_LAYOUT':
+                sample.update(framing_valid=False,raw_only=False,layout_status='INVALID_RESPONSE')
             self.discovery_observations[source,pid] = sample
         # Raw framing belongs to the whole transaction, including failed replies.
         for sample in record.get('discovery_samples',[]): sample['raw_b64'] = record['raw_b64']
@@ -226,12 +255,14 @@ class AcquisitionWorker(threading.Thread):
                 context_id=self.context_id,mode=self.mode,discovery_prepared=self.discovery_prepared,
                 discovery_completed=self.discovery_completed,
                 discovery_target=self.discovery_target,capture_weights=self.capture_weights,
+                capture_raw_pids=sorted(self.capture_raw_pids),
                 support={e:sorted(p) for e,p in self.support.items()},
                 support_pages={e:sorted(p) for e,p in self.support_pages.items()},
                 report=discovery_report(self.support,self.support_pages,self.discovery_observations,mode=self.mode,context_id=self.context_id)))
 
     def emit_capture(self,reason):
         self.emit('capture',dict(active=self.capture_mode,weights=dict(self.capture_weights),
+                                 raw_pids=sorted(self.capture_raw_pids),
                                  ecu=self.discovery_target,reason=reason,context_id=self.context_id))
 
     def ingest_bitmap(self, record, base, publish=True):
@@ -255,6 +286,7 @@ class AcquisitionWorker(threading.Thread):
         self.set_polling(False, 'Standard discovery; basic polling paused')
         self.capture_mode = False
         self.capture_weights = {}
+        self.capture_raw_pids = set()
         self.emit_capture('Discovery; no drive monitoring')
         self.discovery_target = target
         self.discovery_prepared = False
@@ -327,6 +359,7 @@ class AcquisitionWorker(threading.Thread):
         self.discovery_observations = {}
         self.discovery_completed = False
         self.capture_weights = {}
+        self.capture_raw_pids = set()
         self.discovery_target = None
         self.discovery_prepared = False
         self.can_protocol = False
@@ -405,7 +438,14 @@ class AcquisitionWorker(threading.Thread):
             if pid in STANDARD_DIESEL:
                 record['discovery_samples'] = []
                 for reply in positive_replies:
-                    sample = self.diesel_sample(reply,pid,record['timestamp'],record['monotonic_ns'],record.get('mode','Unknown'))
+                    sample = self.diesel_sample(reply,pid,record['timestamp'],record['monotonic_ns'],record.get('mode','Unknown'),
+                                                raw_only=bool(record.get('raw_only')))
+                    sample['raw_b64']=record['raw_b64']
+                    if sample.get('raw_only'):
+                        retained=next((s for s in record.get('raw_samples',[]) if s.get('ecu')==reply.header),{})
+                        sample['context_readings']=retained.get('context_readings',{})
+                    if sample.get('error'):
+                        record['protocol_errors'].append(dict(ecu=reply.header,reason=sample['error'],state='INVALID',category='DECODER_LAYOUT'))
                     self.discovery_observations[reply.header or 'headerless',pid] = sample
                     record['discovery_samples'].append(sample)
                     for reading in self.diesel_readings(sample,pid,record['timestamp'],record['monotonic_ns']):
@@ -434,16 +474,18 @@ class AcquisitionWorker(threading.Thread):
             prepared = bool(self.transport and not self.requires_reconnect and self.can_protocol
                             and self.discovery_prepared and target == self.discovery_target and not self.replay)
             plan = capture_plan(self.support,self.support_pages,self.discovery_observations,target,
-                                prepared=prepared,selected=options.get('pids'))
+                                prepared=prepared,selected=options.get('pids'),raw_selected=options.get('raw_pids',()))
             if not plan['weights']:
                 if prepared:
                     self.capture_mode = self.discovery_active = False
                     self.capture_weights = {}
+                    self.capture_raw_pids = set()
                     self.transport.discovery_enabled = False
                     self.set_polling(False,'No eligible Drive Capture selections; monitoring stopped')
                     self.emit_capture('No eligible selections; monitoring stopped')
                 self.emit('notice','Drive Capture has no eligible selections; complete discovery and inspect omissions'); return
             self.capture_weights = plan['weights']; self.capture_mode = True
+            self.capture_raw_pids = set(plan['raw_pids'])
             if plan['omitted']: self.emit('notice','Omitted selections: '+ '; '.join(f"01{e['pid']}: {e['reason']}" for e in plan['omitted']))
             self.discovery_active = bool(set(self.capture_weights)&DISCOVERY_PIDS)
             self.transport.discovery_enabled = self.discovery_active
