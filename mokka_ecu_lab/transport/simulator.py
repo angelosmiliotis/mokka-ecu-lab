@@ -4,6 +4,11 @@ from . import SafeTransport, TransportError, Cancelled
 
 SCENARIOS = ["Normal idle", "Warming up", "RPM variation", "Adapter timeout", "ECU timeout", "Malformed response", "Unsupported PID", "Disconnection", "Multiple ECUs", "Whitespace and echo", "Incomplete reply", "Conditions Not Correct"]
 SCENARIOS += ['Diesel discovery', 'Diesel discovery 29-bit', 'Diesel multi-ECU', 'Diesel truncated', 'Diesel unknown page']
+SCENARIOS += ['Diesel alternative layouts']
+
+# Constructed, non-identifying payloads. Shape and framing tests, not live logs.
+ALTERNATIVE_PAYLOADS = {0x7A: bytes.fromhex('00 C8 00 00 00 00'),
+                        0x88: bytes.fromhex('00 22 33 00 64 00 C8 01 2C 01 90 01 F4')}
 
 DIESEL_PAYLOADS = {
     0x73: bytes.fromhex('03 27 10 27 74'),
@@ -64,7 +69,8 @@ class Simulator(SafeTransport):
                 raise TransportError("SIMULATED incomplete reply", b"7E8 04 41")
             if pid in DIESEL_PAYLOADS and self.scenario.startswith('Diesel'):
                 header = '18DAF110' if '29-bit' in self.scenario else '7E8'
-                line = can_reply(header,pid,DIESEL_PAYLOADS[pid])
+                payload=ALTERNATIVE_PAYLOADS.get(pid,DIESEL_PAYLOADS[pid]) if self.scenario=='Diesel alternative layouts' else DIESEL_PAYLOADS[pid]
+                line = can_reply(header,pid,payload)
                 if self.scenario == 'Diesel truncated' and len(DIESEL_PAYLOADS[pid]) > 5:
                     line = line.split('\r')[0]
                 if self.scenario == 'Diesel multi-ECU':
