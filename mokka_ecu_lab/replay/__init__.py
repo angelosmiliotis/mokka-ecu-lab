@@ -14,9 +14,13 @@ class Replay:
                 raise ValueError("Replay record exceeds 1 MiB limit")
             try:
                 record = json.loads(line)
-                if record.get("record_type") != "transaction": continue
+                if record.get("record_type") not in {'transaction','marker'}: continue
                 if not isinstance(record.get("monotonic_ns"), int): raise ValueError("Invalid time")
-                base64.b64decode(record["raw_b64"], validate=True)
+                if record['record_type']=='transaction': base64.b64decode(record["raw_b64"], validate=True)
+                else:
+                    if record.get('event') not in {'Journey Start','Journey End','Note'}: raise ValueError('Invalid marker')
+                    if not isinstance(record.get('timestamp'),str) or not isinstance(record.get('note',''),str):
+                        raise ValueError('Invalid marker timestamp/note')
                 return record
             except (json.JSONDecodeError, KeyError, ValueError) as exc:
                 if not line.endswith("\n"):
