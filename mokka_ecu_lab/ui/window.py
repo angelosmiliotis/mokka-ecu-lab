@@ -28,6 +28,7 @@ from mokka_ecu_lab.logging.bundle import export_research_bundle
 from mokka_ecu_lab.layouts import RAW_ONLY_PIDS
 from mokka_ecu_lab.analysis.trends import load_trends
 from .trends import TrendsDialog
+from .research import ResearchView
 
 STYLE = """
 QWidget { background: #121923; color: #e4eaf2; font-family: 'Segoe UI'; font-size: 13px; }
@@ -436,7 +437,7 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         actions.addWidget(self.button("Load payloads from JSONL…", self.load_analysis))
         actions.addWidget(self.button("Compare recordings…", self.compare_recordings))
-        self.analysis_pid = QLineEdit("0C"); self.analysis_pid.setMaximumWidth(65)
+        self.analysis_pid = QLineEdit("7A"); self.analysis_pid.setMaximumWidth(65)
         actions.addWidget(QLabel("Recorded PID:")); actions.addWidget(self.analysis_pid)
         self.analysis_ecu = QLineEdit("7E8"); self.analysis_ecu.setMaximumWidth(90)
         actions.addWidget(QLabel("ECU:")); actions.addWidget(self.analysis_ecu)
@@ -449,7 +450,8 @@ class MainWindow(QMainWindow):
         self.chart.setTitle("Raw integer and candidate value vs sample index (different units; experimental)")
         self.chart_view = QChartView(self.chart); layout.addWidget(self.chart_view)
         self.analysis_summary = QLabel("No hypotheses evaluated"); self.analysis_summary.setWordWrap(True); layout.addWidget(self.analysis_summary)
-        self.tabs.addTab(tab, "Research")
+        self.research_view = ResearchView(self.root,tab,self)
+        self.tabs.addTab(self.research_view, "Research")
 
     def evaluate(self):
         try:
@@ -494,13 +496,19 @@ class MainWindow(QMainWindow):
         if not self.analysis_report: return self.notice("Evaluate a hypothesis first")
         path, _ = QFileDialog.getSaveFileName(self, "Save reproducible experimental report", str(self.root / "hypothesis-report.json"), "JSON (*.json)")
         if path:
-            try: Path(path).write_text(json.dumps(self.analysis_report, indent=2), encoding="utf-8"); self.notice("Experimental report saved")
+            try:
+                self.analysis_report['request'] = '01'+self.analysis_pid.text().strip().upper()
+                self.analysis_report['ecu'] = self.analysis_ecu.text().strip().upper()
+                self.research_view.catalog.add_hypothesis(self.analysis_report)
+                Path(path).write_text(json.dumps(self.analysis_report, indent=2), encoding="utf-8")
+                self.notice("Experimental report saved locally; no decoder promotion")
             except Exception as exc: self.notice(str(exc))
 
     def recording_payloads(self, path):
         pid = int(self.analysis_pid.text(), 16)
         source = self.analysis_ecu.text().strip().upper()
         playback = Replay(Path(path)); payloads, counts, invalid = [], 0, 0
+        source_groups = set()
         try:
             while (record := playback.next()) is not None:
                 counts += 1
@@ -509,9 +517,13 @@ class MainWindow(QMainWindow):
                     for item in record.get("parsed", []):
                         if (item.get("ecu") or "headerless").upper() == source and len(payloads) < 1000:
                             payloads.append(item["data_hex"])
+                            mode=record.get('mode','UNKNOWN')
+                            kind=record.get('source_kind') or ('SIMULATED' if mode=='SIMULATED' else 'ECU_READING' if mode.startswith('LIVE') else 'UNKNOWN')
+                            source_groups.add((mode,kind))
         finally: playback.close()
+        if len(source_groups)>1: raise ValueError('Mixed source groups: use the offline evidence analyzer to view each separately')
         return payloads, {"file": str(path), "pid": f"{pid:02X}", "ecu": source, "transactions": counts,
-            "errors": invalid, "sample_count": len(payloads), "truncated_preview_limit": 1000, "warnings": playback.warnings}
+            "errors": invalid, "sample_count": len(payloads), "source_groups":sorted(source_groups), "truncated_preview_limit": 1000, "warnings": playback.warnings}
 
     def load_analysis(self):
         path, _ = QFileDialog.getOpenFileName(self, "Load recorded payloads", str(self.root), "JSONL (*.jsonl)")
@@ -527,6 +539,8 @@ class MainWindow(QMainWindow):
         if not paths: return
         try:
             result = [self.recording_payloads(path) for path in paths]
+            groups={tuple(group) for _,summary in result for group in summary['source_groups']}
+            if len(groups)>1: raise ValueError('LIVE, SIMULATED and unknown sources cannot be joined; use the offline evidence analyzer')
             self.comparison_summary = [r[1] for r in result]
             self.payloads.setPlainText('\n'.join(x for r in result for x in r[0])[:250000])
             self.analysis_summary.setText(json.dumps(self.comparison_summary))
@@ -566,7 +580,7 @@ class MainWindow(QMainWindow):
         raw_row=QHBoxLayout()
         self.capture_raw_checks={}
         for pid in sorted(RAW_ONLY_PIDS):
-            check=QCheckBox(f'Opt in 01{pid:02X} RAW ONLY / DECODER UNVERIFIED · weight 1')
+            check=QCheckBox(f'Opt in 01{pid:02X} RAW ONLY · numeric output disabled · weight 1')
             check.setEnabled(False); check.stateChanged.connect(self.update_capture)
             self.capture_raw_checks[pid]=check; raw_row.addWidget(check)
         layout.addLayout(raw_row)
@@ -666,7 +680,8 @@ class MainWindow(QMainWindow):
             if sample.get('error'): state+=' · invalid: '+sample['error']
             if sample.get('raw_only'):
                 value,unit='—',''
-                state=('Current raw sample' if current else 'REPLAY / recorded raw' if sample.get('replay') else 'Stale raw sample')+' · RAW ONLY / DECODER UNVERIFIED · '+sample.get('source_kind','UNKNOWN')
+                layout='STANDARD_DOCUMENTED' if sample.get('layout_status')=='STANDARD_DOCUMENTED' else 'DECODER UNVERIFIED'
+                state=('Current raw sample' if current else 'REPLAY / recorded raw' if sample.get('replay') else 'Stale raw sample')+' · RAW ONLY / '+layout+' · '+sample.get('source_kind','UNKNOWN')
             gap=f'age {max(0,age):.2f} s' if age is not None else '—'
             if gaps: gap+=f' / max {max(gaps):.2f} s'
             update_row(self.capture_table,row,[field.get('name',sensor.name),value,unit,state,interval,gap,self.capture_weights.get(pid,'—')])
