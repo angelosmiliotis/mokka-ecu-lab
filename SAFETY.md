@@ -1,6 +1,6 @@
 # Read-only safety boundary
 
-Version 0.1 allows only SAE Mode 01 reads from a fixed code-owned set. `SafeTransport.exchange` validates at the last public boundary before serial writes. It rejects carriage returns, whitespace, command chaining, extra bytes, empty repeats, arbitrary AT commands and all other diagnostic services. Sensor JSON cannot broaden this boundary.
+Version 0.2 allows only SAE Mode 01 reads from fixed code-owned sets. `SafeTransport.exchange` validates at the last public boundary before serial writes. It rejects carriage returns, whitespace, command chaining, extra bytes, empty repeats, arbitrary AT commands and all other diagnostic services. Sensor JSON cannot broaden this boundary.
 
 ## Exact live policy
 
@@ -11,6 +11,14 @@ Version 0.1 allows only SAE Mode 01 reads from a fixed code-owned set. `SafeTran
 `ATI`/`STI` identify the interpreter. E/L/S/H set host-facing formatting. `ATM0` disables saving the last protocol; `ATTP0` tries automatic protocol selection without the persistent save used by `ATSP0`. `ATST64` configures a runtime response timeout (0x64 × 4 ms). DP/DPN describe protocol. This behavior is based on the official [OBDLink Family Reference and Programming Manual](https://www.scantool.net/scantool/downloads/678/obdlink_frpm_e.pdf) and [ELM327 datasheet](https://www.elmelectronics.com/wp-content/uploads/2017/01/ELM327DS.pdf). Genuine hardware has not yet been tested with this implementation.
 
 No bare CR is used: it can repeat a previous command. No ATZ/reset, persistent programmable parameter, ATSP save, custom transmit header, security access, UDS routine, coding, actuator command, DTC clearing, forced regeneration, firmware operation or gateway bypass is present. VIN Mode 09 is absent. Manufacturer queries are absent even when a JSON definition is EXPERIMENTAL or manually relabeled.
+
+## Explicit standard Discovery scope
+
+Initialization retains the basic policy above. Explicit user-started CAN Discovery enables continuation pages 0160/0180/01A0/01C0/01E0 only through the selected ECU's preceding advertised chain. Fixed standard reads 0173/0178/0179/017A/017B/017C/017F/0183/0185/0186/0188/018B require that ECU's support. Unsupported and unknown requests are not probed. The scope closes on scan completion; monitoring requires another explicit action. Stop revokes the scope.
+
+Fixed ATCAF1/ATCFC1/ATAL configure documented automatic formatting, adapter ISO-TP flow control and long-message reception during Discovery. No manual CAN/flow-control frames or arbitrary headers are exposed. The application cap remains 4 requests/s; interpreter-generated CAN transport frames are not individual application requests. Headerless or legacy live advanced discovery is disabled.
+
+D525/D526/D52F/D532 remain offline candidates without numeric decoders. No UDS session/security/OEM request is allowed. Future approval requires exact ECU hardware/software/calibration evidence and reviewed read-only semantics; another PSA vehicle's address is insufficient. See [research and consolidated validation steps](research/v0.2-discovery.md).
 
 ## Operation and limitations
 

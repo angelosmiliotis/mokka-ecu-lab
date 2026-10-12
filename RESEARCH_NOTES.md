@@ -1,5 +1,7 @@
 # Mokka ECU Lab research notes
 
+[v0.2-discovery.md](research/v0.2-discovery.md) records the consulted primary standard edition, ELM/STN documentation, reported Peugeot DIDs and addressing/session caveats, actual software compatibility evidence still needed, and exact steps for one deferred consolidated standard vehicle session. OEM DIDs remain offline; no session transition or new vehicle support claim was made. Older findings below describe the original delivery.
+
 Research date: 12 October 2026. Vehicle, COM4 and previous app readings below are owner-provided observations. The car was unavailable during development. No serial connection, ECU identity, support bitmap, or manufacturer-specific decoder has been validated on this vehicle.
 
 ## Adapter communication evidence

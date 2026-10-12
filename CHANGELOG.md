@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.0 — 2026-10-12
+
+- Explicit ECU-specific standard diesel discovery and advertised bitmap continuation through E0; separate optional monitoring shares the 4 application requests/s cap.
+- Classic CAN ISO-TP reception with sequence/length/source isolation, raw error retention and legacy replay compatibility.
+- Twelve documented diesel PID layouts and a sixth Discovery tab with fields, sources, confidence and JSON evidence export. Original dashboard and v0.1.1 fixes remain.
+- MD1CS003 D525/D526/D52F/D532 research entries without live reads or numeric guesses. No UDS sessions, security, arbitrary headers, writes or routines.
+- 240 passing tests and native Windows synthetic verification. No vehicle connection; modern PID 88 extensions and OEM compatibility remain unverified. Consolidated future steps: research/v0.2-discovery.md.
+
 ## 0.1.1
 
 - Parse Mode 01 negative replies, including CAN length/DLC, headerless and legacy frames. Retain NRC/ECU/reason alongside original command and raw reply. Keep positive measurements from other responding ECUs separate.

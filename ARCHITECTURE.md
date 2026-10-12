@@ -1,5 +1,9 @@
 # Architecture
 
+## v0.2 Discovery extension
+
+`protocols/isotp.py` returns independently validated responses plus per-source errors; state is local to one reply. `sensors/diesel.py` owns strict historical standard layouts and offline candidates. `discovery.py` builds evidence reports without a transmit API. The worker follows ECU-specific continuation and temporarily enables fixed standard Discovery scope on SafeTransport; monitoring shares PollScheduler with basic sensors. Original bytes and advanced fields use the existing recorder, without journal migration. Replay recomputes fields using recorded support and never creates a transport. The sixth tab shows metadata/export while the dashboard remains ten sensors. See [research](research/v0.2-discovery.md) for revision and vehicle boundaries.
+
 The Qt main thread owns display widgets and bounded previews. One `AcquisitionWorker` thread owns serial/simulator transport, support discovery, polling, SQLite/JSONL recording and streaming replay. A bounded 64-entry command queue and 512-entry UI event queue connect them. Critical state messages replace an old preview when the event queue is full. The GUI drains at most 100 events per 100 ms. The worker records before publishing previews; preview drops never remove on-disk records.
 
 ## Modules
@@ -8,7 +12,7 @@ The Qt main thread owns display widgets and bounded previews. One `AcquisitionWo
 |---|---|
 | `transport` | Port enumeration, 8N1 serial framing, strict pre-write safety validation, rate cap, cancellation, synthetic fixtures |
 | `adapter` | Single-worker lifetime, identity/configuration, per-ECU PID discovery, optional smooth weighted round-robin, capture orchestration |
-| `protocols` | Fixed command allowlist, positive and negative Mode 01 matching, CAN/legacy single-frame parsing, bitmap semantics |
+| `protocols` | Fixed/scoped command allowlists, Mode 01 matching, classic CAN ISO-TP and legacy parsing, bitmap semantics |
 | `sensors` | Validated JSON registry, standard numeric decoders, units, provenance and verification |
 | `logging` | Per-session append-only raw JSONL; SQLite session metadata and separate decoded readings; exports |
 | `replay` | Streaming journal reader, truncated final-line recovery |

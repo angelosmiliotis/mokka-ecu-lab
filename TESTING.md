@@ -1,5 +1,15 @@
 # Testing and vehicle validation
 
+## Version 0.2.0 offline validation
+
+**240 tests passed** on 12 October 2026. New coverage includes per-ECU continuation through A0 and closed/unknown chains, explicit Discovery allowlists and prohibited OEM/session/header commands, classic CAN first/consecutive frames up to the 4095-byte bound, sequence wrap, padding, DLC/compact/29-bit formats, segmented headerless output, malformed/duplicate/truncated streams and independent ECU survival. All twelve diesel layouts have positive and wrong-length fixtures; field flags, signed delta pressure, 85 tank level, 8B status/type and trigger, units and 88 reserved/current/history checks are covered.
+
+Worker tests cover acquisition/recording, CSV export, recomputation on replay, unchanged legacy v0.1.1 journals, scope revocation, Stop/Disconnect and measured aggregate wire intervals during initialization, scanning and monitoring. GUI tests cover explicit ECU selection, disabled OEM reads, source/error isolation, JSON evidence export, replay labels, context reset and shared nominal intervals without adding speculative dashboard rows.
+
+Run `scripts/verify_discovery.py --output-dir release/v0.2.0-validation` for the native Windows Simulation check: 6 tabs, 12 advanced PID rows (11 with available fields, one with none supported), 33 transactions, zero errors, the original 10-row dashboard, disabled OEM reads and a closed recording. Reports/screenshots remain under ignored release folders. The portable summary is `samples/v0.2.0-validation.json`. No COM port was opened.
+
+Historical validation below is retained. The next hardware check is one **deferred consolidated session** covering legacy behavior and standard discovery together, specified in [research/v0.2-discovery.md](research/v0.2-discovery.md). No redundant v0.1.1 vehicle run was performed. Modern 13-byte PID 88, CAN FD, extended addressing, real adapter firmware and actual vehicle support remain unverified.
+
 Run `.\.venv\Scripts\python.exe -m pytest -q` from the project root. Tests cover all ten standard formulas, conversions/validity, allowlist/injection rejection, support bitmaps including unknown pages, separate ECU provenance, 11/29-bit CAN and legacy/echo/whitespace/DLC reply formats, truncated/malformed data, serial prompt/timeout preservation, thread ownership, queued Stop and receive cancellation/rate cap, all simulation scenarios, recording/redaction/CSV/JSONL, interrupted final journal, worker Stop/reconnect/replay, manual COM entry and native Qt widget/chart startup. The serial boundary is tested with a fake serial object; it is not physical Bluetooth validation.
 
 `scripts/generate_demo.py` runs the real simulator acquisition worker, begins recording before initialization, acquires a complete sensor cycle, stops/closes the session, exports CSV/JSONL and checks the streaming replay count against SQLite. Samples are explicitly synthetic.
@@ -29,6 +39,6 @@ Native Windows GUI validation in Normal idle acquired ten synthetic sensors, wit
 7. Only after stationary checks, record a long controlled session and inspect request timing, error counts, memory and disk behavior. A passenger should operate diagnostics; the driver should not interact with the app.
 8. Do not enable manufacturer reads until request semantics, evidence and user confirmation are obtained. Confirm decoder meaning against independent measurements before assigning VEHICLE_VERIFIED. No regeneration/SCR/adaptation routines are authorized.
 
-## Remaining validation limits
+## Historical v0.1.1 validation limits (multiframe added in v0.2)
 
 No physical MX+, ECU or COM4 connection was opened while implementing or testing v0.1.1. The user's first-live-session analysis motivates the minimal regression fixtures, but it does not validate this patched executable on the vehicle. Bluetooth SPP, sensor accuracy, physical ignition behavior and long-drive reliability need revalidation. Synthetic failures approximate framing/errors; Windows Bluetooth drivers can fail differently. Multiframe ISO-TP, automatic raw/SQLite reconciliation, full Greek localization, iOS, CarPlay and manufacturer live queries are absent. Research reference comparison is positional, not automatic clock alignment. No uncertain regeneration signal triggers a warning.

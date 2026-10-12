@@ -1,12 +1,12 @@
 # Mokka ECU Lab
 
-Version 0.1.1 adds explicit Mode 01 ECU rejection reasons, immediate stale/recorded evidence states, clean session shutdown in either Stop order, and optional per-sensor priorities. See [CHANGELOG.md](CHANGELOG.md). Vehicle validation of this patch remains pending; software tests use minimal response fixtures and simulation, never a real COM connection.
+Version 0.2.0 adds ECU-specific standard diesel discovery, ISO-TP reception, documented field decoders and a Discovery tab with evidence exports. All v0.1.1 fixes remain. New vehicle support is unverified; development uses simulation only. See [research and consolidated validation steps](research/v0.2-discovery.md).
 
 A locally runnable Windows 11 desktop application for read-only OBD-II acquisition, recording, replay and offline decoder research. Python 3.12+ / PySide6 / pyserial. No account, telemetry or automatic connection. The first delivery includes ten generic Mode 01 sensors. Manufacturer-specific live requests are intentionally absent.
 
 ## Run on this computer
 
-The project environment is already installed. The packaged v0.1.1 executable was built and smoke-tested: double-click **release\v0.1.1-20261012-143049\MokkaECULab\MokkaECULab.exe**. Keep its `_internal` folder beside it. The older `release\validated` folder is v0.1.0.
+The project environment is already installed. Download the versioned Windows package from [GitHub Releases](https://github.com/angelosmiliotis/mokka-ecu-lab/releases), extract it and double-click **MokkaECULab/MokkaECULab.exe**. Keep its `_internal` folder beside it. Older local release folders retain their original versions.
 
 For source execution, double-click **launch.cmd**, or from this directory:
 
@@ -50,6 +50,10 @@ No activation or PowerShell execution-policy changes are required. `launch.ps1` 
 
 The ECU timeout and malformed-response simulations periodically fail. Adapter timeout, incomplete reply and disconnection scenarios stop the transport; press Connect to explicitly reconnect. Unsupported PID omits oil temperature. Stop interrupts waits and prevents new requests; Disconnect also closes the serial port. Recording controls are independent of polling controls.
 
+## Standard diesel discovery
+
+Choose **Diesel discovery** in Simulation, start recording before Connect, then open **Discovery** and select an ECU. **Scan standard PIDs for selected ECU** follows only advertised bitmap continuation and pauses basic polling. Inspect field support, values, raw bytes and documented metadata; export JSON evidence. Completion leaves samples only. **Monitor available standard PIDs** is a separate explicit action sharing the 4 req/s scheduler. Stop cancels it; Resume restores basic polling. OEM rows remain offline research entries. Additional synthetic scenarios cover 29-bit CAN, multiple ECUs, truncation and unknown support pages.
+
 ## Connect the vehicle later — hardware unverified
 
 Park safely, set the parking brake and follow the adapter/vehicle instructions. Close OBDwiz, Car Scanner and any other client first; one client can own COM4 at a time. Plug in/power the MX+, enable Bluetooth and ignition, choose **Bluetooth serial**, **COM4**, **115200**, then Connect. COM3 is the incoming port and is never preferred. COM4 remains manually selectable even when unavailable. Port descriptions may not identify a Bluetooth adapter reliably.
@@ -64,6 +68,7 @@ Baud choices 115200/38400/9600 are host settings; no automatic baud scan or pers
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe scripts\generate_demo.py
 .\.venv\Scripts\python.exe scripts\verify_ui.py
+.\.venv\Scripts\python.exe scripts\verify_discovery.py
 .\.venv\Scripts\python.exe -m mokka_ecu_lab --smoke-test --data-dir samples\ui-smoke
 ```
 
@@ -81,7 +86,8 @@ The checked-in PyInstaller spec excludes foreign ICU DLLs from the builder's PAT
 
 - No manufacturer DPF/AdBlue/SCR PID is verified, queried or fabricated. No regeneration detector is enabled.
 - Only the fixed Mode 01 allowlist can transmit live. Editing a JSON definition cannot authorize a new request or diagnostic service.
-- Parser handles the single-frame generic replies needed here, including CAN 11/29-bit and common legacy header forms. ISO-TP multiframe reassembly is not implemented. Raw replies are retained for future parser extensions.
+- Parser handles classic CAN 11/29-bit ISO-TP single/multiple frames with source isolation and strict sequence/length checks, plus legacy generic replies and offline headerless ELM segmentation. Live advanced discovery requires identified CAN sources. CAN FD and extended addressing are absent.
+- New standard PIDs are 73, 78, 79, 7A, 7B, 7C, 7F, 83, 85, 86, 88 and 8B. Decoders use documented OCT2011 layouts; PID 88 accepts three data bytes only. Other revisions retain raw errors without fabricated values. OEM D525/D526/D52F/D532 remain research-only. No distance-since-last-regeneration estimate is inferred from standard averages.
 - Round-robin is the default. Enable **Use sensor priorities** to assign weights 1–4 to selected supported sensors (initial suggestions: RPM 3, coolant 2, others 1). Weighted scheduling changes each sensor's share of the existing aggregate rate; all adapter commands and vehicle requests still pass the unchanged four-request-per-second cap. Dashboard shows actual mean interval, age, recent maximum gap and current/support coverage; Sensor Explorer shows nominal intervals. These are not guarantees under timeouts or slow storage.
 - Before switching ignition off, **Stop Recording and Stop polling, then Disconnect**. Either Stop order is supported; Finish session submits Stop polling followed by Stop Recording. Disconnect and application shutdown also finalize any open recording. Reconnecting closes a nonempty previous session; start a new recording for the new connection/source.
 - `7F 01 22` is shown as **ECU_NEGATIVE_RESPONSE / Conditions Not Correct**, separately from malformed data and transport errors. It does not prove an ignition event or a vehicle defect. Raw request/reply bytes remain intact. Three consecutive ECU failures stop polling and require explicit reconnect; there is no automatic retry. A rejected ECU's cached values become stale; another ECU's valid replies remain separate.

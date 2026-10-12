@@ -1,5 +1,9 @@
 # Sensor registry
 
+## v0.2 standard diesel fields
+
+The original JSON registry and ten-sensor dashboard remain intact. Twelve code-owned definitions in `mokka_ecu_lab/sensors/diesel.py` cover PIDs 73, 78, 79, 7A, 7B, 7C, 7F, 83, 85, 86, 88 and 8B. Discovery detail/export includes every field's layout, formula, units, support flag, validity, source table, edition and verification, plus source ECU and payload. Numeric outputs carry STANDARD_DOCUMENTED and vehicle UNVERIFIED. Unsupported fields produce null, not zero; malformed layouts produce no invented readings. History field identifiers are stable ASCII keys. OEM entries have no numeric decoder and cannot authorize transmission. See [research](research/v0.2-discovery.md) for historical-layout limits.
+
 `mokka_ecu_lab/sensors/standard.json` holds structured definitions. Runtime schema validation requires ID, name, hexadecimal PID, service, positive response, source ECU, layout/length, byte order, signedness, scale/offset, range, formula, unit, validity, limitations, evidence and verification. Duplicate IDs/PIDs and malformed metadata are rejected.
 
 | PID | Sensor | Formula | Original unit |
@@ -33,4 +37,4 @@ UI also distinguishes unavailable/no sample and stale/last valid sample. Unsuppo
 
 Add a validated Mode 01 definition with an honest verification state and evidence. The GUI reads registry metadata and needs no sensor-specific widget changes. The generic decoder currently supports one/two-byte, big-endian, unsigned linear scaling. Specialized future layouts should add a named decoder implementation with tests. New live PIDs remain blocked until the code-owned policy is reviewed and deliberately updated. Editing registry metadata is an explicit source modification, not evidence of physical verification; never relabel a speculative formula to make it appear verified.
 
-Manufacturer DID registries and multiframe responses are future work. Offline Research can evaluate arbitrary supplied bytes now without authorizing a live command.
+Manufacturer numeric DID decoders remain future work. Standard classic-CAN multiframe reception is implemented in v0.2. Offline Research can evaluate arbitrary supplied bytes without authorizing a live command.
