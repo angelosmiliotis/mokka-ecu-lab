@@ -12,6 +12,7 @@ from mokka_ecu_lab.protocols import parse_obd, supported_pids, LIVE_PIDS
 from mokka_ecu_lab.sensors import load_registry
 from mokka_ecu_lab.logging import Recorder, utc_now
 from mokka_ecu_lab.replay import Replay
+from .scheduling import PollScheduler
 
 class AcquisitionWorker(threading.Thread):
     def __init__(self, root: Path):
@@ -28,6 +29,11 @@ class AcquisitionWorker(threading.Thread):
         self.support = {}
         self.support_pages = {}
         self.polling = False
+        self.priorities = {}
+        self.scheduler = PollScheduler()
+        self.failures = 0
+        self.requires_reconnect = False
+        self.context_id = uuid.uuid4().hex
         self.rate = 4.0
         self.dropped = 0
         self.replay_playing = False
@@ -57,13 +63,16 @@ class AcquisitionWorker(threading.Thread):
 
     def transaction(self, command):
         sent_ns, stamp = time.monotonic_ns(), utc_now()
-        raw, error, status, readings, parsed = b"", "", "OK", [], []
+        raw, error, status, readings, parsed, rejections = b"", "", "OK", [], [], []
         try:
             raw = self.transport.exchange(command, self.stop_io)
             if command.startswith("01"):
                 pid = int(command[2:], 16)
                 replies = parse_obd(raw, pid, command)
                 for reply in replies:
+                    if reply.negative_code is not None:
+                        rejections.append(reply.rejection())
+                        continue
                     source = reply.header or "headerless"
                     parsed.append({"ecu": reply.header, "data_hex": reply.data.hex(' ').upper()})
                     if pid in self.registry:
@@ -73,7 +82,11 @@ class AcquisitionWorker(threading.Thread):
                         readings.append({"sensor_id": sensor.id, "pid": pid, "ecu": reply.header,
                             "value": sensor.decode(reply.data), "unit": sensor.unit,
                             "verification": sensor.metadata["verification"], "timestamp": stamp,
-                            "monotonic_ns": sent_ns, "decoder": sensor.id, "mode": self.mode})
+                            "monotonic_ns": sent_ns, "decoder": sensor.id, "mode": self.mode,
+                            "source_kind": "SIMULATED" if self.mode == "SIMULATED" else "ECU_READING"})
+                if rejections:
+                    status = "ECU_NEGATIVE_RESPONSE"
+                    error = '; '.join(f'{r["ecu"] or "headerless"}: {r["reason"]} (7F 01 {r["nrc"]})' for r in rejections)
         except TransportError as exc:
             raw, error, status = exc.raw, str(exc), "CANCELLED" if isinstance(exc, Cancelled) else "TRANSPORT_ERROR"
         except ValueError as exc:
@@ -86,13 +99,14 @@ class AcquisitionWorker(threading.Thread):
                 reading["timestamp"], reading["monotonic_ns"] = stamp, sent_ns
         record = {"id": uuid.uuid4().hex, "timestamp": stamp, "monotonic_ns": sent_ns,
             "port": self.port, "adapter": self.adapter, "protocol": self.protocol, "mode": self.mode,
+            "context_id": self.context_id, "source_kind": "SIMULATED" if self.mode == "SIMULATED" else "ECU_READING",
             "serial_settings": {"baud": getattr(self.transport, "baud", None), "data_bits": 8, "parity": "N", "stop_bits": 1},
             "request_id": command, "pid": command[2:] if command.startswith("01") else None,
             "command": command, "outbound_b64": base64.b64encode((command + '\r').encode()).decode(),
             "sent": wire_ns is not None,
             "raw_b64": base64.b64encode(raw).decode(), "raw_text": raw.decode("ascii", "replace"),
             "latency_ms": (time.monotonic_ns() - sent_ns) / 1e6, "status": status,
-            "parsed": parsed, "decoder": [r["decoder"] for r in readings],
+            "parsed": parsed, "negative_responses": rejections, "decoder": [r["decoder"] for r in readings],
             "verification": [r["verification"] for r in readings], "error": error}
         if self.recorder: self.recorder.append(record, readings)
         self.emit("transaction", (record, readings))
@@ -101,19 +115,39 @@ class AcquisitionWorker(threading.Thread):
         if status == "CANCELLED": raise Cancelled(error, raw)
         return record
 
-    def disconnect(self):
-        self.polling = False
+    def set_polling(self, active, reason, requires_reconnect=False):
+        self.polling = active
+        self.requires_reconnect = requires_reconnect
+        self.emit("acquisition", {"polling": active, "reason": reason, "requires_reconnect": requires_reconnect})
+
+    def close_recording(self):
+        if self.recorder:
+            self.recorder.close()
+            self.recorder = None
+        self.emit("recording", None)
+
+    def disconnect(self, finish_recording=True):
+        self.set_polling(False, "Disconnected")
         if self.transport: self.transport.close()
         self.transport = None
+        if finish_recording: self.close_recording()
         self.emit("connection", {"adapter": "Disconnected", "ecu": "Unavailable", "protocol": self.protocol, "mode": self.mode})
 
     def initialize(self, options):
-        self.disconnect()
+        # An empty pre-connect recorder is allowed; captured sources never share a session.
+        if self.recorder and self.recorder.count:
+            self.close_recording()
+            self.emit("notice", "Previous session closed before reconnect/source change. Start Recording for the new session.")
+        self.disconnect(finish_recording=False)
         if self.replay: self.replay.close(); self.replay = None
         self.replay_playing = False
         self.support = {}
         self.support_pages = {}
         self.mode = "SIMULATED" if options["simulation"] else "LIVE · hardware unverified"
+        self.context_id = uuid.uuid4().hex
+        self.failures = 0
+        self.scheduler = PollScheduler()
+        self.emit("context", {"id": self.context_id, "mode": self.mode})
         if self.recorder:
             self.recorder.db.execute("UPDATE sessions SET mode=? WHERE id=?", (self.mode, self.recorder.id))
             self.recorder.db.commit()
@@ -149,15 +183,28 @@ class AcquisitionWorker(threading.Thread):
         self.emit("support", self.support)
         self.emit("support_pages", self.support_pages)
         self.emit("connection", {"adapter": self.adapter, "ecu": "Connected" if self.support else "No verified ECU response", "protocol": self.protocol, "mode": self.mode})
-        self.polling = bool(self.support)
+        self.set_polling(bool(self.support), "Polling" if self.support else "No verified ECU response")
 
     def decode_replay(self, record):
+        # Reclassify legacy v0.1.0 INVALID negative replies without rewriting the journal.
+        record = dict(record, replay=True, context_id=self.context_id)
         readings = []
         if record.get("pid"):
             pid = int(record["pid"], 16)
+            try:
+                replies = parse_obd(base64.b64decode(record["raw_b64"]), pid, record["command"])
+            except ValueError:
+                replies = []
+            rejections = [r.rejection() for r in replies if r.negative_code is not None]
+            if rejections:
+                record["original_status"] = record["status"]
+                record["status"] = "ECU_NEGATIVE_RESPONSE"
+                record["negative_responses"] = rejections
+                record["error"] = '; '.join(f'{r["ecu"] or "headerless"}: {r["reason"]} (7F 01 {r["nrc"]})' for r in rejections)
+            positive_replies = [r for r in replies if r.negative_code is None]
             if pid in {0, 32, 64} and record.get("status") == "OK":
                 try:
-                    for reply in parse_obd(base64.b64decode(record["raw_b64"]), pid, record["command"]):
+                    for reply in positive_replies:
                         source = reply.header or "headerless"
                         if pid == 0 or pid in self.support.get(source, set()):
                             self.support.setdefault(source, set()).update(supported_pids(reply.data, pid))
@@ -165,39 +212,51 @@ class AcquisitionWorker(threading.Thread):
                     self.emit("support", dict(self.support))
                     self.emit("support_pages", dict(self.support_pages))
                 except ValueError as exc: self.emit("notice", str(exc))
-            if pid in self.registry and record.get("status") == "OK":
+            if pid in self.registry and record.get("original_status", record.get("status")) in {"OK", "ECU_NEGATIVE_RESPONSE"}:
                 sensor = self.registry[pid]
                 try:
-                    for reply in parse_obd(base64.b64decode(record["raw_b64"]), pid, record["command"]):
+                    for reply in positive_replies:
                         readings.append({"sensor_id": sensor.id, "pid": pid, "ecu": reply.header,
                             "value": sensor.decode(reply.data), "unit": sensor.unit,
                             "verification": sensor.metadata["verification"], "timestamp": record["timestamp"],
-                            "monotonic_ns": record["monotonic_ns"], "mode": "REPLAY · " + record.get("mode", "unknown")})
+                            "monotonic_ns": record["monotonic_ns"], "mode": "REPLAY · " + record.get("mode", "unknown"),
+                            "source_kind": "SIMULATED" if record.get("mode") == "SIMULATED" else "ECU_READING" if record.get("mode", "").startswith("LIVE") else "UNKNOWN"})
                 except ValueError as exc: self.emit("notice", str(exc))
-        self.emit("transaction", (dict(record, replay=True), readings))
+        self.emit("transaction", (record, readings))
 
     def handle(self, action, options):
         if action == "connect": self.initialize(options)
         elif action == "disconnect": self.disconnect()
-        elif action == "stop": self.polling = False; self.replay_playing = False
+        elif action == "stop":
+            self.set_polling(False, "Polling stopped by user", self.requires_reconnect)
+            self.replay_playing = False
         elif action == "start" and self.transport:
-            self.polling = bool(self.support)
+            if self.requires_reconnect:
+                self.emit("notice", "Polling remains stopped after ECU failures. Check ignition and explicitly reconnect.")
+            else:
+                self.failures = 0
+                self.set_polling(bool(self.support), "Polling resumed")
         elif action == "select": self.selected = options["pids"]
+        elif action == "priorities": self.priorities = options["weights"] if options.get("enabled") else {}
         elif action == "rate":
             self.rate = max(0.25, min(4., options["rate"]))
             if self.transport: self.transport.rate = self.rate
         elif action == "record":
+            if self.replay:
+                self.emit("notice", "Replay is recorded evidence, not a new ECU session. Recording replay is disabled.")
+                return
             if not self.recorder:
-                self.recorder = Recorder(self.root, self.mode, {"vehicle": "Opel Mokka B 2022 1.5 diesel", "adapter": "REDACTED", "VIN": "not queried"})
+                self.recorder = Recorder(self.root, self.mode if self.transport else "Pending connection", {"vehicle": "Opel Mokka B 2022 1.5 diesel", "adapter": "REDACTED", "VIN": "not queried"})
                 self.emit("recording", self.recorder.id)
         elif action == "record_stop":
-            if self.recorder: self.recorder.close(); self.recorder = None
-            self.emit("recording", None)
+            self.close_recording()
         elif action == "replay":
             self.disconnect()
-            if self.recorder: self.recorder.close(); self.recorder = None; self.emit("recording", None)
             if self.replay: self.replay.close()
             self.replay = Replay(Path(options["path"]))
+            self.mode = "REPLAY"
+            self.context_id = uuid.uuid4().hex
+            self.emit("context", {"id": self.context_id, "mode": self.mode})
             self.support = {}
             self.support_pages = {}
             self.pending_record, self.replay_previous = None, None
@@ -214,31 +273,35 @@ class AcquisitionWorker(threading.Thread):
         elif action == "shutdown": self.quit_event.set()
 
     def run(self):
-        index, failures = 0, 0
         try:
             while not self.quit_event.is_set():
                 try:
                     action, options = self.commands.get(timeout=0.02 if self.polling or self.replay_playing else 0.1)
                     self.handle(action, options)
-                    if action == "connect": index, failures = 0, 0
                 except queue.Empty: pass
                 except Cancelled:
-                    self.polling = False
+                    self.set_polling(False, "Connection canceled")
                     if self.transport and self.transport.last_wire_ns is not None:
                         self.disconnect(); self.emit("notice", "Receive canceled after send; reconnect to restore prompt synchronization")
                 except Exception as exc:
                     self.emit("notice", str(exc)); self.disconnect()
                 if self.polling and self.transport and not self.stop_io.is_set():
                     pids = [p for p in self.selected if p in LIVE_PIDS and p in self.transport.supported]
-                    if not pids: self.polling = False; continue
+                    pid = self.scheduler.next(pids, self.priorities)
+                    if pid is None:
+                        self.set_polling(False, "No selected supported sensors")
+                        continue
                     try:
-                        record = self.transaction(f"01{pids[index % len(pids)]:02X}")
-                        index += 1
-                        failures = failures + 1 if record["status"] != "OK" else 0
-                        if failures >= 3:
-                            self.polling = False; self.emit("notice", "Polling stopped after three invalid/ECU replies. Reconnect after checking ignition and adapter.")
+                        record = self.transaction(f"01{pid:02X}")
+                        self.failures = self.failures + 1 if record["status"] != "OK" else 0
+                        if self.failures >= 3:
+                            reason = ("Conditions Not Correct (7F 01 22); ignition state is not confirmed"
+                                      if any(r["nrc"] == "22" for r in record["negative_responses"])
+                                      else record["error"] or "Invalid ECU reply")
+                            self.set_polling(False, reason, requires_reconnect=True)
+                            self.emit("notice", f"Polling stopped after three consecutive ECU failures: {reason}. Values are stale. Stop Recording, check ignition and reconnect explicitly.")
                     except Cancelled:
-                        self.polling = False
+                        self.set_polling(False, "Polling canceled", self.requires_reconnect)
                         if self.transport and self.transport.last_wire_ns is not None:
                             self.disconnect(); self.emit("notice", "Receive canceled after send; reconnect to restore prompt synchronization")
                     except Exception as exc:
@@ -260,5 +323,4 @@ class AcquisitionWorker(threading.Thread):
                         self.replay_playing = False; self.emit("notice", str(exc))
         finally:
             self.disconnect()
-            if self.recorder: self.recorder.close()
             if self.replay: self.replay.close()
