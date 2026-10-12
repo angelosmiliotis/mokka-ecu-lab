@@ -23,6 +23,8 @@ from mokka_ecu_lab.protocols import support_state, DISCOVERY_PIDS
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.adapter.scheduling import priority_weights, nominal_interval
+from mokka_ecu_lab.capture import capture_plan, manual_options, DRIVE_WEIGHTS
+from mokka_ecu_lab.logging.bundle import export_research_bundle
 
 STYLE = """
 QWidget { background: #121923; color: #e4eaf2; font-family: 'Segoe UI'; font-size: 13px; }
@@ -77,6 +79,11 @@ class MainWindow(QMainWindow):
         self.discovery_active = False
         self.discovery_prepared = False
         self.discovery_target = None
+        self.capture_active = False
+        self.capture_weights = {}
+        self.capture_ecu = None
+        self.capture_history = {}
+        self.last_recording_id = None
         self.discovery_reason = 'No discovery started'
         self.raw_records = deque(maxlen=500)
         self.sessions = []
@@ -108,6 +115,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget(); layout.addWidget(self.tabs)
         self.build_dashboard(); self.build_sessions(); self.build_raw(); self.build_explorer(); self.build_research()
         self.build_discovery()
+        self.build_capture()
         self.statusBar().showMessage("Ready. Select Simulation and Connect to develop without a vehicle.")
         self.timer = QTimer(self); self.timer.timeout.connect(self.drain); self.timer.start(100)
         self.refresh_sessions(); self.refresh_ports()
@@ -118,16 +126,19 @@ class MainWindow(QMainWindow):
         return b
 
     def send(self, action, **kwargs):
-        if action in {'discover','monitor_discovery'}:
+        if action in {'discover','monitor_discovery','drive_capture'}:
             self.user_paused = False
         if action == 'discover': self.polling_active = False
         if action in {'stop','disconnect','replay','shutdown','connect'}:
             self.discovery_active = False
+            self.capture_active = False
         if action in {"stop", "disconnect", "replay", "shutdown", "connect"}:
             self.polling_active = False
             self.user_paused = action != "connect"
             self.acquisition_reason = "Polling stopped by user" if action == "stop" else "Connection changing / offline"
-        elif action == "start": self.user_paused = False
+        elif action == "start":
+            self.user_paused = False
+            self.capture_active = False
         try: self.worker.submit(action, **kwargs)
         except Exception as exc: self.notice(str(exc))
 
@@ -244,7 +255,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(tab, "Dashboard")
 
     def update_language(self, enabled):
-        labels = ["Πίνακας", "Συνεδρίες", "Ακατέργαστα", "Αισθητήρες", "Έρευνα", "Ανακάλυψη"] if enabled else ["Dashboard", "Sessions", "Raw Data", "Sensor Explorer", "Research", "Discovery"]
+        labels = ["Πίνακας", "Συνεδρίες", "Ακατέργαστα", "Αισθητήρες", "Έρευνα", "Ανακάλυψη", "Drive Capture"] if enabled else ["Dashboard", "Sessions", "Raw Data", "Sensor Explorer", "Research", "Discovery", "Drive Capture"]
         for i, label in enumerate(labels): self.tabs.setTabText(i, label)
         self.connect_button.setText("Σύνδεση" if enabled else "Connect")
         self.disconnect_button.setText("Αποσύνδεση" if enabled else "Disconnect")
@@ -275,9 +286,11 @@ class MainWindow(QMainWindow):
                                 ("Open JSONL replay…", self.open_replay), ("Export CSV…", self.csv_export), ("Export JSONL…", self.jsonl_export)]:
             row.addWidget(self.button(label, callback))
         layout.addLayout(row)
+        self.bundle_button = self.button('Export Research Bundle',self.bundle_export)
+        layout.addWidget(self.bundle_button)
         instructions = QLabel("Before ignition OFF: Stop Recording and Stop polling, then Disconnect. Either Stop order is supported. Disconnect finalizes an open journal and SQLite session.")
         instructions.setWordWrap(True); layout.addWidget(instructions)
-        self.diagnostic_export = QCheckBox("Diagnostic support export: include unredacted adapter/port and identification bytes")
+        self.diagnostic_export = QCheckBox("Diagnostic support export: include original adapter/port, identification bytes and marker notes")
         layout.addWidget(self.diagnostic_export)
         layout.addWidget(QLabel("Vehicle: Opel Mokka B, 2022, 1.5 diesel. VIN is never queried. Adapter identifiers are redacted by default."))
         self.session_table = table(["Session", "Started (UTC)", "Ended (UTC)", "Duration", "Source", "Requests", "Errors"])
@@ -339,6 +352,19 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Export raw journal", str(self.root / (s["id"] + "-export.jsonl")), "JSONL (*.jsonl)")
         if path:
             try: export_jsonl(self.root / s["raw_path"], Path(path), self.diagnostic_export.isChecked()); self.notice("JSONL exported")
+            except Exception as exc: self.notice(str(exc))
+
+    def bundle_export(self,latest=False):
+        if self.recording_id: return self.notice('Finish session / Stop Recording before exporting')
+        self.refresh_sessions()
+        session = next((s for s in self.sessions if s['id']==self.last_recording_id),None) if latest else self.current_session()
+        session = session or self.current_session() or (self.sessions[0] if self.sessions else None)
+        if not session or not session['ended']: return self.notice('Select a closed session; use Finish session first')
+        path,_ = QFileDialog.getSaveFileName(self,'Export Research Bundle',str(self.root/(session['id']+'-research.zip')),'ZIP (*.zip)')
+        if path:
+            try:
+                export_research_bundle(self.root,session['id'],Path(path))
+                self.notice('Research Bundle saved locally: redacted evidence, intervals, errors and SHA-256 checksums. Original journal unchanged.')
             except Exception as exc: self.notice(str(exc))
 
     def build_raw(self):
@@ -496,6 +522,106 @@ class MainWindow(QMainWindow):
     def source_key(self):
         return self.ecu.currentData() or (next(iter(self.support), None))
 
+    def build_capture(self):
+        tab=QWidget(); layout=QVBoxLayout(tab)
+        label=QLabel('Connect → Start Recording → Standard Discovery (stationary) → Drive Capture preset → Start Drive Capture → Finish session → Export Research Bundle')
+        label.setWordWrap(True); layout.addWidget(label)
+        controls=QHBoxLayout()
+        self.capture_source=QComboBox(); self.capture_source.setModel(self.ecu.model())
+        self.capture_source.currentIndexChanged.connect(self.ecu.setCurrentIndex)
+        self.ecu.currentIndexChanged.connect(self.capture_source.setCurrentIndex)
+        self.capture_preset=self.button('Drive Capture',self.prepare_capture)
+        self.capture_start=self.button('Start Drive Capture',self.start_capture,'primary')
+        self.capture_bundle=self.button('Export Research Bundle',lambda:self.bundle_export(latest=True))
+        for w in (QLabel('ECU:'),self.capture_source,self.capture_preset,self.capture_start,
+                  self.button('Finish session',self.finish_session),self.capture_bundle): controls.addWidget(w)
+        layout.addLayout(controls)
+        hint=QLabel('The preset prepares choices only; Start Drive Capture sends requests. Checkbox edits take effect when Start Drive Capture is pressed again. Discovery is never repeated automatically. A passenger should operate this research UI; prepare before driving.')
+        hint.setWordWrap(True); layout.addWidget(hint)
+        self.capture_status=QLabel('Complete standard discovery before preparing a drive preset.'); self.capture_status.setWordWrap(True); layout.addWidget(self.capture_status)
+        split=QSplitter()
+        self.capture_list=QListWidget(); self.capture_list.setMaximumWidth(370); split.addWidget(self.capture_list)
+        self.capture_table=table(['Measurement','Value','Units','State / evidence','Observed mean interval','Age / maximum gap','Weight'])
+        split.addWidget(self.capture_table); split.setStretchFactor(1,1); layout.addWidget(split,1)
+        self.capture_focus=QCheckBox('Focused dashboard (at most seven readings)')
+        layout.addWidget(self.capture_focus)
+        marker_row=QHBoxLayout()
+        self.journey_start=self.button('Journey Start',lambda:self.send('marker',event='Journey Start'))
+        self.journey_end=self.button('Journey End',lambda:self.send('marker',event='Journey End'))
+        self.marker_note=QLineEdit(); self.marker_note.setMaxLength(512); self.marker_note.setPlaceholderText('Passenger note; local original only, text redacted in Research Bundle')
+        self.note_button=self.button('Note',self.add_note)
+        for w in (self.journey_start,self.journey_end,self.marker_note,self.note_button): marker_row.addWidget(w)
+        layout.addLayout(marker_row)
+        self.marker_table=table(['Marker UTC','Event','Note / evidence']); self.marker_table.setMaximumHeight(110)
+        layout.addWidget(self.marker_table)
+        self.capture_omissions=QTextEdit(); self.capture_omissions.setReadOnly(True); self.capture_omissions.setMaximumHeight(150)
+        layout.addWidget(self.capture_omissions)
+        self.tabs.addTab(tab,'Drive Capture'); self.update_capture()
+
+    def prepare_capture(self):
+        ecu=self.source_key(); prepared=self.discovery_prepared and ecu==self.discovery_target and self.connected and not self.requires_reconnect
+        preset=capture_plan(self.support,self.support_pages,self.discovery_observations,ecu,prepared=prepared)
+        options=manual_options(self.support,self.support_pages,self.discovery_observations,ecu,prepared=prepared)
+        self.capture_list.clear()
+        for pid,weight in options['weights'].items():
+            sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
+            item=QListWidgetItem(f'{sensor.name} / 01{pid:02X} · weight {weight}')
+            item.setData(Qt.ItemDataRole.UserRole,pid); item.setFlags(item.flags()|Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if pid in preset['weights'] else Qt.CheckState.Unchecked)
+            self.capture_list.addItem(item)
+        self.capture_plan_ecu=ecu
+        self.capture_omissions.setPlainText('\n'.join(f"01{e['pid']} {e['name']}: {e['reason']}" for e in options['omitted']) or 'All documented choices have valid support evidence.')
+        self.capture_status.setText('Preset prepared; no requests started. Check choices, then press Start Drive Capture.')
+        self.update_capture()
+
+    def capture_selected(self):
+        return [self.capture_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.capture_list.count())
+                if self.capture_list.item(i).checkState()==Qt.CheckState.Checked]
+
+    def add_note(self):
+        self.send('marker',event='Note',note=self.marker_note.text())
+        self.marker_note.clear()
+
+    def start_capture(self):
+        if self.source_key()!=getattr(self,'capture_plan_ecu',None):
+            return self.notice('ECU changed; prepare the Drive Capture preset for this ECU first')
+        self.send('drive_capture',ecu=self.source_key(),pids=self.capture_selected())
+
+    def update_capture(self):
+        if not hasattr(self,'capture_list'): return
+        prepared=self.connected and self.discovery_prepared and self.source_key()==self.discovery_target and not self.requires_reconnect
+        self.capture_preset.setEnabled(prepared and not (self.discovery_active and not self.polling_active))
+        self.capture_start.setEnabled(prepared and self.source_key()==getattr(self,'capture_plan_ecu',None) and (bool(self.capture_selected()) or self.capture_active))
+        self.capture_bundle.setEnabled(not self.recording_id and bool(self.sessions))
+        self.bundle_button.setEnabled(not self.recording_id and bool(self.sessions))
+        for widget in (self.journey_start,self.journey_end,self.note_button,self.marker_note):
+            widget.setEnabled(bool(self.recording_id) and self.mode!='REPLAY')
+        pids=[0x8B,0x7A,0x7C,0x0C,0x0D,0x05,0x85] if self.capture_focus.isChecked() else (self.capture_selected() or list(DRIVE_WEIGHTS))
+        self.capture_table.setRowCount(len(pids))
+        for row,pid in enumerate(pids):
+            sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
+            sample=self.discovery_observations.get((self.source_key(),pid),{})
+            suffix={0x8B:'_regeneration',0x7A:'_delta_pressure',0x7C:'_bank_1_inlet',0x78:'_bank_1_sensor_1',0x85:'_tank_level'}.get(pid)
+            field=next((f for f in sample.get('fields',[]) if not suffix or f.get('sensor_id','').endswith(suffix)),{})
+            value,unit='—',field.get('unit','')
+            state=support_state(self.support.get(self.source_key(),set()),self.support_pages.get(self.source_key(),set()),pid).upper()
+            times=self.capture_history.get((self.source_key(),pid),[])
+            gaps=[b-a for a,b in zip(times,list(times)[1:]) if b>a]
+            interval=f'{sum(gaps)/len(gaps):.2f} s' if gaps else 'No interval yet'
+            age=time.monotonic()-sample.get('monotonic_ns',0)/1e9 if sample.get('monotonic_ns') else None
+            expected=nominal_interval(pid,self.capture_weights,self.rate.value()) if pid in self.capture_weights else 0
+            current=self.capture_active and self.polling_active and self.connected and self.source_key()==self.capture_ecu and pid in self.capture_weights and age is not None and age<=max(5,expected*2.5) and not sample.get('error') and not sample.get('replay')
+            if field.get('state')=='AVAILABLE' and field.get('value') is not None:
+                value=field.get('display',field['value'])
+                if isinstance(value,(int,float)): value=f'{value:.2f}'
+                state='Current sample' if current else 'REPLAY / recorded' if sample.get('replay') else 'Stale / last sample'
+                state+=' · '+sample.get('source_kind','UNKNOWN')
+            elif state=='SUPPORTED': state='No valid supported field / unavailable'
+            if sample.get('error'): state+=' · invalid: '+sample['error']
+            gap=f'age {max(0,age):.2f} s' if age is not None else '—'
+            if gaps: gap+=f' / max {max(gaps):.2f} s'
+            update_row(self.capture_table,row,[field.get('name',sensor.name),value,unit,state,interval,gap,self.capture_weights.get(pid,'—')])
+
     def build_discovery(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
         message = QLabel('Standard Mode 01 only. Start discovery explicitly for the selected ECU. Unsupported/unknown PIDs are never probed. Samples remain vehicle-unverified; OEM candidates are offline only.')
@@ -573,7 +699,10 @@ class MainWindow(QMainWindow):
                                     if i.data(Qt.ItemDataRole.UserRole) in self.support.get(source, set())],
                                    self.priorities if self.use_priorities.isChecked() else {})
         schedule_weights = dict(weights)
-        if self.discovery_active and self.polling_active:
+        if self.capture_active:
+            weights={p:w for p,w in self.capture_weights.items() if p in weights}
+            schedule_weights=dict(self.capture_weights)
+        elif self.discovery_active and self.polling_active:
             schedule_weights.update(priority_weights(DISCOVERY_PIDS & self.support.get(self.discovery_target,set()),
                                                      {},allow_discovery=True))
         current, states = 0, {}
@@ -643,6 +772,9 @@ class MainWindow(QMainWindow):
                 self.support.clear(); self.support_pages.clear()
                 self.discovery_observations.clear(); self.discovery_active = False
                 self.discovery_prepared = False; self.discovery_target = None
+                self.capture_active=False; self.capture_weights.clear(); self.capture_history.clear()
+                self.capture_list.clear(); self.capture_plan_ecu=None
+                self.marker_table.setRowCount(0)
                 self.discovery_reason = 'New connection/replay context; no discovery evidence'
                 self.ecu.clear(); self.ecu.addItem("Automatic first responding ECU", "")
                 self.rejection_reason.clear()
@@ -660,6 +792,15 @@ class MainWindow(QMainWindow):
                 if value.get('context_id') != self.context_id: continue
                 self.discovery_active = value['active']; self.discovery_reason = value['reason']
                 self.discovery_prepared = value.get('prepared',False); self.discovery_target = value.get('target')
+            elif kind == 'capture':
+                if value.get('context_id')!=self.context_id: continue
+                self.capture_active=value['active']; self.capture_weights=value['weights']; self.capture_ecu=value['ecu']
+                self.capture_status.setText(value['reason'])
+            elif kind == 'marker':
+                if value.get('context_id')!=self.context_id: continue
+                if self.marker_table.rowCount()>=100: self.marker_table.removeRow(0)
+                add_row(self.marker_table,[value['timestamp'],value['event'],
+                        value.get('note','')+(' · REPLAY / recorded' if value.get('replay') else ' · local marker; no ECU request')])
             elif kind == "connection":
                 self.mode = value["mode"]
                 self.connected = value["ecu"] == "Connected"
@@ -671,6 +812,7 @@ class MainWindow(QMainWindow):
                     if self.ecu.findData(source) < 0: self.ecu.addItem(source, source)
             elif kind == "support_pages": self.support_pages = value
             elif kind == "recording":
+                if value: self.last_recording_id=value
                 self.recording_id = value; self.recording_started = time.monotonic() if value else None
                 self.refresh_sessions()
             elif kind == "transaction":
@@ -696,8 +838,12 @@ class MainWindow(QMainWindow):
                     self.discovery_observations[key] = {'ecu':reading['ecu'],'pid':reading['pid'],
                         'fields':[dict(state='AVAILABLE',name=self.registry[reading['pid']].name,value=reading['value'],unit=self.registry[reading['pid']].unit)],
                         'timestamp':reading['timestamp'],'source_kind':reading.get('source_kind','UNKNOWN'),'replay':replay}
+                    self.discovery_observations[key]['monotonic_ns']=reading['monotonic_ns']
+                    self.capture_history.setdefault(key,deque(maxlen=30)).append(sent_at)
                 for sample in record.get('discovery_samples',[]):
                     self.discovery_observations[sample['ecu'] or 'headerless',sample['pid']] = sample
+                    if sample.get('monotonic_ns') and not sample.get('error') and any(f['state']=='AVAILABLE' for f in sample['fields']):
+                        self.capture_history.setdefault((sample['ecu'] or 'headerless',sample['pid']),deque(maxlen=30)).append(sample['monotonic_ns']/1e9)
                 for problem in record.get('protocol_errors',[]):
                     source = problem['ecu'] or 'unknown'
                     if record.get('pid'):
@@ -725,6 +871,7 @@ class MainWindow(QMainWindow):
                         if p == pid: reading["invalid"] = True
         self.update_measurements()
         self.update_discovery()
+        self.update_capture()
         duration = time.monotonic() - self.recording_started if self.recording_started else 0
         self.stats.setText(f'Recording: {self.recording_id[:12] if self.recording_id else "off"}  {duration:.1f}s   |   Requests: {self.request_count}   |   Errors: {self.error_count}   |   Dropped UI previews: {self.worker.dropped}')
         self.record_button.setEnabled(not self.recording_id)
