@@ -18,6 +18,7 @@ from mokka_ecu_lab.replay import Replay
 from .scheduling import PollScheduler
 from mokka_ecu_lab.capture import capture_plan, DECODER_VERSION
 from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, layout_evidence
+from mokka_ecu_lab.auto_capture import auto_plan, AcquisitionReceipt, PRESETS, affirmative_bitmap
 from mokka_ecu_lab import __version__
 
 class AcquisitionWorker(threading.Thread):
@@ -42,6 +43,12 @@ class AcquisitionWorker(threading.Thread):
         self.capture_mode = False
         self.capture_weights = {}
         self.capture_raw_pids = set()
+        self.auto_receipt = None
+        self.auto_starting = False
+        self.auto_deadline = None
+        self.auto_last_save = 0.
+        self.bitmap_evidence = {}
+        self.bitmap_conflicts = set()
         self.can_protocol = False
         self.polling = False
         self.priorities = {}
@@ -78,7 +85,7 @@ class AcquisitionWorker(threading.Thread):
                 self.pending_markers[token]=dict(kwargs,session_id=recorder.id if recorder else None,
                                                 timestamp=utc_now(),monotonic_ns=time.monotonic_ns())
             kwargs={'marker_id':token}
-        if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture"}:
+        if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture", "full_auto", "retry_auto"}:
             # Clear only at user submission, so a later Stop cancels queued Connect too.
             self.stop_io.clear()
         if action in {"disconnect", "stop", "shutdown", "replay"}:
@@ -178,6 +185,12 @@ class AcquisitionWorker(threading.Thread):
             record['support_pages'] = {e:sorted(p) for e,p in self.support_pages.items()}
         self.retain_discovery_errors(record)
         if self.recorder: self.recorder.append(record, readings)
+        if self.auto_receipt:
+            if self.recorder and (self.auto_starting or self.auto_receipt.data['state'] in {'WAITING_RAW','PARTIAL','READY'}):
+                self.auto_receipt.track_transaction(record)
+            self.auto_receipt.observe(record, readings, recorded=bool(self.recorder),
+                active=self.capture_mode and self.auto_receipt.data['state'] in {'WAITING_RAW','PARTIAL','READY'})
+            self.update_auto_receipt()
         self.emit("transaction", (record, readings))
         if status == "TRANSPORT_ERROR":
             raise TransportError(error, raw)
@@ -250,20 +263,143 @@ class AcquisitionWorker(threading.Thread):
 
     def save_capture_evidence(self):
         if self.recorder:
-            self.recorder.evidence(dict(application_version=__version__,decoder_version=DECODER_VERSION,
+            self.recorder.evidence(self.capture_evidence())
+
+    def capture_evidence(self):
+        return dict(application_version=__version__,decoder_version=DECODER_VERSION,
                 evidence_saved_at=utc_now(),
                 context_id=self.context_id,mode=self.mode,discovery_prepared=self.discovery_prepared,
                 discovery_completed=self.discovery_completed,
                 discovery_target=self.discovery_target,capture_weights=self.capture_weights,
                 capture_raw_pids=sorted(self.capture_raw_pids),
+                acquisition_receipt=self.auto_receipt.snapshot() if self.auto_receipt else None,
                 support={e:sorted(p) for e,p in self.support.items()},
                 support_pages={e:sorted(p) for e,p in self.support_pages.items()},
-                report=discovery_report(self.support,self.support_pages,self.discovery_observations,mode=self.mode,context_id=self.context_id)))
+                report=discovery_report(self.support,self.support_pages,self.discovery_observations,mode=self.mode,context_id=self.context_id))
 
     def emit_capture(self,reason):
         self.emit('capture',dict(active=self.capture_mode,weights=dict(self.capture_weights),
                                  raw_pids=sorted(self.capture_raw_pids),
                                  ecu=self.discovery_target,reason=reason,context_id=self.context_id))
+
+    def auto_stage(self, state, reason):
+        if not self.auto_receipt: return
+        self.auto_receipt.transition(state, reason, utc_now())
+        self.auto_receipt.data.update(context_id=self.context_id,mode=self.mode,
+            adapter_open=bool(self.transport), recording_active=bool(self.recorder),
+            source_kind='SIMULATED' if self.mode=='SIMULATED' else 'ECU_READING' if self.mode.startswith('LIVE') else 'UNKNOWN',
+            session_id=self.recorder.id if self.recorder else self.auto_receipt.data.get('session_id'))
+        self.auto_receipt.readiness(state in {'WAITING_RAW','PARTIAL','READY'} and self.capture_mode and self.polling and bool(self.recorder))
+        self.emit('auto_capture',self.auto_receipt.snapshot())
+        self.save_capture_evidence()
+
+    def update_auto_receipt(self, force=False):
+        if not self.auto_receipt: return
+        now=time.monotonic(); data=self.auto_receipt.data
+        previous=data['dpf']['state']
+        ready=self.auto_receipt.readiness(data['state'] in {'WAITING_RAW','PARTIAL','READY'} and self.capture_mode and self.polling and bool(self.recorder))
+        if data['state'] in {'WAITING_RAW','PARTIAL','READY'} and ready=='READY' and data['state']!='READY':
+            self.auto_stage('READY',data['dpf']['reason']); force=True
+        elif data['state']=='READY' and ready=='PARTIAL':
+            self.auto_stage('PARTIAL',data['dpf']['reason']); force=True
+        elif data['state']=='WAITING_RAW' and self.auto_deadline is not None and now>=self.auto_deadline:
+            self.auto_stage('PARTIAL','Bounded preflight expired; 017A proof incomplete. Other eligible sensors continue; inspect while parked.')
+            force=True
+        if force or ready!=previous or now-self.auto_last_save>=1.:
+            self.emit('auto_capture',self.auto_receipt.snapshot())
+        if force or now-self.auto_last_save>=5.:
+            self.save_capture_evidence(); self.auto_last_save=now
+
+    def reject_auto(self, reason):
+        self.emit('notice',reason)
+        self.emit('auto_rejected',dict(context_id=self.context_id,reason=reason))
+
+    def full_auto(self, options):
+        """One deliberate action; all writes use the existing serialized path."""
+        preset=options.get('preset',PRESETS[0])
+        if options.get('consent') is not True or preset not in PRESETS:
+            self.reject_auto('Full Auto requires explicit single-preset RAW consent and a known preset'); return
+        if self.replay or self.requires_reconnect:
+            self.reject_auto('Leave replay / reconnect explicitly after failures before Full Auto'); return
+        reuse=bool(self.transport)
+        if reuse and not options.get('reuse'):
+            self.reject_auto('Adapter already open; explicitly use current ECU connection or disconnect first'); return
+        if reuse and bool(options.get('simulation')) != (self.mode=='SIMULATED'):
+            self.reject_auto('Selected source differs from current connection; disconnect explicitly'); return
+        if not reuse and not options.get('simulation') and not options.get('port','').strip():
+            self.reject_auto('Select an outgoing LIVE serial port before Full Auto'); return
+        if self.recorder and self.recorder.count and not reuse:
+            self.reject_auto('Finish the previous recording before starting a new connection'); return
+        # No previously observed session may authorize the current preset.
+        previous=self.auto_receipt.snapshot() if self.auto_receipt and self.recorder and self.auto_receipt.data.get('session_id')==self.recorder.id else None
+        consent_time=options.get('inherited_consent_timestamp') or utc_now()
+        self.auto_receipt=AcquisitionReceipt(preset,True,consent_time)
+        self.auto_receipt.data['requested_source']='SIMULATION' if options.get('simulation') else 'LIVE'
+        if previous:
+            history=previous.pop('previous_attempts',[])
+            self.auto_receipt.data['previous_attempts']=(history+[previous])[-16:]
+            self.auto_receipt.data['previous_attempts_truncated']=len(history)+1>16 or previous.get('previous_attempts_truncated',False)
+        if options.get('inherited_consent_timestamp'):
+            self.auto_receipt.data['consent_provenance']='INHERITED_FROM_THIS_PRESET_RUN; explicit parked Retry action'
+        self.auto_starting=True
+        try:
+            self.handle('record',{})
+            if not self.recorder: raise ValueError('Recording did not start')
+            self.auto_stage('RECORDING','Recording acknowledged before connection; initialization retained')
+            if not reuse:
+                self.auto_stage('CONNECTING','Opening explicitly selected source; awaiting positive ECU response')
+                self.initialize(options)
+            if self.stop_io.is_set(): raise Cancelled('Full Auto stopped before Discovery')
+            if not self.transport or not self.can_protocol:
+                raise ValueError('Identified ISO 15765-4 CAN ECU required; no arbitrary probing')
+            candidates=[e for e in self.support if e!='headerless']
+            target=options.get('ecu')
+            if not target and len(candidates)==1: target=candidates[0]
+            if target not in candidates:
+                raise ValueError('No unique verified ECU; select the responding ECU explicitly while parked')
+            self.auto_receipt.data['ecu']=target
+            if any(e==target for e,base in self.bitmap_conflicts):
+                raise ValueError('Conflicting raw bitmap evidence for current ECU; no automatic sensor probing')
+            self.auto_stage('DISCOVERING',f'ECU {target} confirmed; bounded standard supported-PID Discovery')
+            self.discover(target)
+            if not self.discovery_prepared or self.requires_reconnect or self.stop_io.is_set():
+                raise ValueError('Discovery did not complete; no automatic retry')
+            if any(e==target for e,base in self.bitmap_conflicts):
+                raise ValueError('Conflicting raw bitmap evidence for current ECU; Full Auto aborted without sensor probing')
+            # Known basic measurements also need one strict positive sample.
+            for pid in sorted(LIVE_PIDS & self.support[target]):
+                if not affirmative_bitmap(self.support,self.support_pages,target,pid): continue
+                if self.stop_io.is_set(): raise Cancelled('Full Auto stopped before basic sample')
+                record=self.transaction(f'01{pid:02X}')
+                self.failures=self.failures+1 if record['status']!='OK' else 0
+                if self.failures>=3:
+                    self.set_polling(False,record['error'],requires_reconnect=True)
+                    raise ValueError('Three consecutive failures; reconnect explicitly')
+            plan=auto_plan(self.support,self.support_pages,self.discovery_observations,target,
+                           prepared=True,consent=True,preset=preset)
+            if not plan['weights']: raise ValueError('No eligible known standard sensors; inspect bitmap/sample evidence')
+            self.auto_receipt.configure(plan,session_id=self.recorder.id,context_id=self.context_id,
+                mode=self.mode,bitmap_evidence=self.bitmap_evidence.get(target,{}),rate=self.rate)
+            self.auto_stage('CONFIGURED','All eligible current ECU sensors selected; omitted sensors have explicit reasons')
+            self.handle('drive_capture',dict(ecu=target,auto_preset=preset,consent=True))
+            if not self.capture_mode or self.capture_weights!=plan['weights'] or self.capture_raw_pids!=set(plan['raw_pids']):
+                raise ValueError('Worker schedule differs from requested preset; capture aborted')
+            self.auto_receipt.acknowledge(self.capture_weights,self.capture_raw_pids,self.discovery_target,utc_now())
+            maximum=max(e['nominal_interval_seconds'] for e in self.auto_receipt.data['effective_schedule'].values())
+            bound=min(120.,max(30.,maximum*3.))
+            self.auto_deadline=time.monotonic()+bound
+            self.auto_receipt.data['preflight_timeout_seconds']=bound
+            if '7A' in self.auto_receipt.data['confirmed_raw_pids']:
+                self.auto_stage('WAITING_RAW','Worker capture acknowledged; waiting for two recorded six-byte 017A RAW responses')
+            else:
+                self.auto_stage('PARTIAL','Other eligible sensors monitoring; six-byte 017A RAW target not available. Inspect reason before departure.')
+        except Exception as exc:
+            self.set_polling(False,str(exc),self.requires_reconnect)
+            self.auto_stage('ABORTED',str(exc)+'; no automatic reconnect or retry')
+            raise
+        finally:
+            self.auto_starting=False
+
 
     def ingest_bitmap(self, record, base, publish=True):
         for item in record['parsed']:
@@ -271,6 +407,15 @@ class AcquisitionWorker(threading.Thread):
             if base == 0 or (base in self.support.get(source,set()) and base-32 in self.support_pages.get(source,set())):
                 self.support.setdefault(source,set()).update(supported_pids(bytes.fromhex(item['data_hex']),base))
                 self.support_pages.setdefault(source,set()).add(base)
+                prior=self.bitmap_evidence.get(source,{}).get(f'{base:02X}')
+                if prior and prior['payload_hex']!=item['data_hex']:
+                    self.bitmap_conflicts.add((source,base))
+                    self.bitmap_evidence[source][f'{base:02X}']['conflict']=True
+                    continue
+                self.bitmap_evidence.setdefault(source,{})[f'{base:02X}'] = dict(
+                    payload_hex=item['data_hex'], timestamp=record['timestamp'],
+                    transaction_id=record['id'], context_id=self.context_id,
+                    provenance='POSITIVE_RAW_BITMAP', recorded=bool(self.recorder))
         if self.transport:
             self.transport.supported = set().union(*self.support.values()) if self.support else set()
             self.transport.discovery_supported = set(self.support.get(self.discovery_target,set()))
@@ -301,6 +446,8 @@ class AcquisitionWorker(threading.Thread):
                 if 'OK' not in self.transaction(command)['raw_text'].upper():
                     raise TransportError(f'Documented CAN setup rejected: {command}')
             for base in range(32,256,32):
+                if self.auto_starting and any(e==target for e,base in self.bitmap_conflicts):
+                    raise ValueError('Conflicting raw bitmap evidence; Discovery stopped without sensor probing')
                 if base not in self.support[target] or base-32 not in self.support_pages[target]: break
                 if base in self.support_pages[target]: continue
                 record = self.transaction(f'01{base:02X}')
@@ -308,6 +455,9 @@ class AcquisitionWorker(threading.Thread):
                 if base not in self.support_pages[target]: break
             self.failures = 0
             for pid in sorted(DISCOVERY_PIDS & self.support[target]):
+                if self.auto_starting and (not affirmative_bitmap(self.support,self.support_pages,target,pid) or
+                                          any(e==target for e,base in self.bitmap_conflicts)):
+                    continue
                 if self.stop_io.is_set(): raise Cancelled('Discovery stopped before send')
                 record = self.transaction(f'01{pid:02X}')
                 self.failures = self.failures+1 if record['status']!='OK' else 0
@@ -330,11 +480,23 @@ class AcquisitionWorker(threading.Thread):
             with self.marker_lock: tokens=list(self.pending_markers)
             for token in tokens: self.persist_marker({'marker_id':token})
             self.save_capture_evidence()
-            self.recorder.close()
+            final_auto=bool(self.auto_receipt and not self.auto_starting)
+            if final_auto:
+                self.auto_receipt.data['capture_outcome']=dict(state=self.auto_receipt.data['state'],reason=self.auto_receipt.data['reason'])
+                self.auto_receipt.data['dpf_proof_met_before_close']=self.auto_receipt.data['dpf']['recorded_positive_six_byte_frames']>=2
+                self.auto_receipt.data.update(recording_active=False,adapter_open=bool(self.transport))
+                self.auto_receipt.readiness(False)
+                self.auto_receipt.transition('FINISHED','Recording finalized; inspect stored counts and export locally',utc_now())
+            ended=self.recorder.close(evidence=self.capture_evidence() if final_auto else None)
             self.recorder = None
+            if final_auto:
+                self.auto_receipt.data['closed_at']=ended
+                self.emit('auto_capture',self.auto_receipt.snapshot())
         self.emit("recording", None)
 
     def disconnect(self, finish_recording=True):
+        if self.auto_receipt and not self.auto_starting and self.auto_receipt.data['state'] not in {'FINISHED','ABORTED'}:
+            self.auto_stage('STOPPED', 'Adapter disconnected; no automatic reconnect')
         self.capture_mode = False
         self.emit_capture('Disconnected; cached values are historical')
         self.discovery_active = False
@@ -356,6 +518,8 @@ class AcquisitionWorker(threading.Thread):
         self.replay_playing = False
         self.support = {}
         self.support_pages = {}
+        self.bitmap_evidence = {}
+        self.bitmap_conflicts = set()
         self.discovery_observations = {}
         self.discovery_completed = False
         self.capture_weights = {}
@@ -389,6 +553,7 @@ class AcquisitionWorker(threading.Thread):
                 raise TransportError(f"Required adapter configuration rejected: {cmd}")
         self.emit("connection", {"adapter": self.adapter, "ecu": "Discovering support", "protocol": "Auto", "mode": self.mode})
         for base in (0, 32, 64):
+            if self.auto_starting and self.bitmap_conflicts: break
             if base and not any(base in s for s in self.support.values()): break
             record = self.transaction(f"01{base:02X}")
             self.ingest_bitmap(record, base, publish=False)
@@ -465,16 +630,31 @@ class AcquisitionWorker(threading.Thread):
         self.emit("transaction", (record, readings))
 
     def handle(self, action, options):
-        if action == "connect": self.initialize(options)
+        if action == 'full_auto': self.full_auto(options)
+        elif action == 'retry_auto':
+            if not self.auto_receipt or not self.transport or self.requires_reconnect or self.replay or not self.recorder or not self.discovery_prepared:
+                self.reject_auto('Retry requires an open healthy transport, active recording and completed Discovery; reconnect is explicit'); return
+            self.full_auto(dict(options, reuse=True, preset=self.auto_receipt.data['preset'], consent=self.auto_receipt.data['raw_consent'],
+                inherited_consent_timestamp=self.auto_receipt.data['consent_timestamp']))
+        elif action == "connect":
+            if self.auto_receipt: self.auto_stage('STOPPED','Explicit new connection; previous automatic run ended')
+            self.auto_receipt = None
+            self.initialize(options)
         elif action == 'marker':
             self.persist_marker(options)
         elif action == 'discover': self.discover(options.get('ecu'))
         elif action == 'drive_capture':
+            if self.auto_receipt and not self.auto_starting:
+                self.auto_stage('STOPPED','Manual capture configuration; automatic receipt no longer counts samples')
             target = options.get('ecu')
             prepared = bool(self.transport and not self.requires_reconnect and self.can_protocol
                             and self.discovery_prepared and target == self.discovery_target and not self.replay)
-            plan = capture_plan(self.support,self.support_pages,self.discovery_observations,target,
-                                prepared=prepared,selected=options.get('pids'),raw_selected=options.get('raw_pids',()))
+            if options.get('auto_preset'):
+                plan = auto_plan(self.support,self.support_pages,self.discovery_observations,target,
+                    prepared=prepared,consent=options.get('consent') is True,preset=options['auto_preset'])
+            else:
+                plan = capture_plan(self.support,self.support_pages,self.discovery_observations,target,
+                                    prepared=prepared,selected=options.get('pids'),raw_selected=options.get('raw_pids',()))
             if not plan['weights']:
                 if prepared:
                     self.capture_mode = self.discovery_active = False
@@ -508,6 +688,7 @@ class AcquisitionWorker(threading.Thread):
             self.emit_discovery(True,'Monitoring supported standard PIDs; vehicle unverified')
         elif action == "disconnect": self.disconnect()
         elif action == "stop":
+            if self.auto_receipt: self.auto_stage('STOPPED','Stopped by user; no automatic retry')
             self.capture_mode = False
             self.emit_capture('Stopped; cached values are historical')
             self.discovery_active = False
@@ -516,6 +697,7 @@ class AcquisitionWorker(threading.Thread):
             self.set_polling(False, "Polling stopped by user", self.requires_reconnect)
             self.replay_playing = False
         elif action == "start" and self.transport:
+            if self.auto_receipt: self.auto_stage('STOPPED','Manual basic polling; automatic schedule no longer active')
             if self.requires_reconnect:
                 self.emit("notice", "Polling remains stopped after ECU failures. Check ignition and explicitly reconnect.")
             else:
@@ -530,11 +712,20 @@ class AcquisitionWorker(threading.Thread):
         elif action == "rate":
             self.rate = max(0.25, min(4., options["rate"]))
             if self.transport: self.transport.rate = self.rate
+            if self.auto_receipt and self.capture_mode:
+                self.auto_receipt.data['rate_limit']=self.rate
+                total=sum(self.capture_weights.values())
+                for entry in self.auto_receipt.data['effective_schedule'].values():
+                    entry['nominal_interval_seconds']=total/(entry['weight']*self.rate)
+                self.update_auto_receipt(force=True)
         elif action == "record":
             if self.replay:
                 self.emit("notice", "Replay is recorded evidence, not a new ECU session. Recording replay is disabled.")
                 return
             if not self.recorder:
+                if self.auto_receipt and not self.auto_starting:
+                    self.auto_receipt=None
+                    self.emit('auto_reset',dict(context_id=self.context_id))
                 self.recorder = Recorder(self.root, self.mode if self.transport else "Pending connection", {"vehicle": "Opel Mokka B 2022 1.5 diesel", "adapter": "REDACTED", "VIN": "not queried"})
                 self.save_capture_evidence()
                 self.emit("recording", self.recorder.id)
@@ -576,7 +767,8 @@ class AcquisitionWorker(threading.Thread):
         if not self.recorder or self.replay:
             self.emit('notice','Start Recording before adding a journey marker'); return
         record=self.recorder.marker(options.get('event'),options.get('note',''),self.mode,
-                                    options.get('timestamp'),options.get('monotonic_ns'))
+                                    options.get('timestamp'),options.get('monotonic_ns'),
+                                    options.get('phase'),options.get('uncertainty_seconds',0),self.discovery_target)
         self.emit('marker',dict(record,context_id=self.context_id,replay=False))
 
     def run(self):
@@ -614,6 +806,7 @@ class AcquisitionWorker(threading.Thread):
                             self.transport.discovery_enabled = False
                             self.emit_discovery(False, reason)
                             self.emit("notice", f"Polling stopped after three consecutive ECU failures: {reason}. Values are stale. Stop Recording, check ignition and reconnect explicitly.")
+                            if self.auto_receipt: self.auto_stage('ABORTED',reason+'; reconnect explicitly')
                     except Cancelled:
                         self.set_polling(False, "Polling canceled", self.requires_reconnect)
                         if self.transport and self.transport.last_wire_ns is not None:
