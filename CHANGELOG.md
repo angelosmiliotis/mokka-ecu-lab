@@ -1,5 +1,15 @@
 # Changes
 
+## 0.2.6 — Workflow clarity and state accuracy
+
+- Separate completed, recommended, available, blocked, future and acknowledged-active workflow steps. Step navigation never records or acquires. A contextual next action invokes one existing explicit operation; recording before connection remains available.
+- Shared freshness presentation for Dashboard and Drive Capture derives current status from source/ECU/context, actual sample times, the existing schedule and observed intervals. Acquisition provenance, sample recording provenance and global recording state remain distinct. Basic polling is no longer mislabeled stale; stopped, failed, disconnected and replay evidence stay distinct.
+- Persistent SIMULATION — synthetic data and LIVE — Bluetooth / Serial ECU labels include scenario/port and observed ECU. Serial opening never completes ECU connection. Source changes discard old display evidence; replay retains recorded provenance while preparing another source.
+- Worker-confirmed recording/capture transitions, closed-session export prerequisites, useful disabled-action explanations and explicit reconnect guidance. Finish stops polling and closes recording without adding a disconnect; the existing receive-cancel safety may still require reconnect.
+- Simple capture view prioritizes basic readings and understandable DPF/AdBlue/NOx names. Technical view retains PID names, weights, intervals, gaps, omissions and original evidence. Larger body/caption text, wrapping action rows and visibly disabled stop buttons preserve laptop usability.
+- Successful private bundle exports show their exact destination. Intentional cancellations remain in total transaction errors and original journals; the monitoring failure count excludes them.
+- Read-only allowlists, worker, transport, scheduler, numeric decoders, offline analyzer and 4 aggregate req/s cap are unchanged. No cloud, automatic acquisition, OEM live queries, historical support promotion or private input was added.
+
 ## 0.2.5 — Desktop workflow and design system
 
 - Native PySide6 shell with grouped, keyboard-accessible sidebar, compact navigation at narrow widths, original Qt line icons, shared dark theme and separate source/connection/ECU/polling/recording/activity indicators.

@@ -1,6 +1,6 @@
 # Mokka ECU Lab
 
-Version 0.2.5 redesigns the native Windows desktop with a grouped sidebar, explicit connection/recording states, real sensor cards and a guided Drive Capture workflow. Data and Research pages add search, clear evidence inspection and structured SCR summaries. All acquisition and numeric decoder rules, read-only permissions and the aggregate 4 req/s cap are unchanged. See [the desktop guide and actual simulated screenshots](docs/UI_DESIGN.md), [evidence/report compatibility](research/v0.2.4-evidence-reports.md) and [the operator guide](DRIVE_CAPTURE.md).
+Version 0.2.6 refines the existing native desktop: workflow steps distinguish recommendations from confirmed success, current basic polling is shown consistently across Dashboard and Drive Capture, and SIMULATION/LIVE identity stays explicit. Recording, capture, completion and private export actions have actual-state prerequisites. Simple and technical capture views preserve all engineering detail. All acquisition and numeric decoder rules, read-only permissions and the aggregate 4 req/s cap are unchanged. See [the state/UX guide and actual simulated screenshots](docs/UX_STATUS.md), [the desktop design](docs/UI_DESIGN.md), [evidence/report compatibility](research/v0.2.4-evidence-reports.md) and [the operator guide](DRIVE_CAPTURE.md).
 
 A locally runnable Windows 11 desktop application for read-only OBD-II acquisition, recording, replay and offline decoder research. Python 3.12+ / PySide6 / pyserial. No account, telemetry or automatic connection. The first delivery includes ten generic Mode 01 sensors. Manufacturer-specific live requests are intentionally absent.
 
@@ -39,7 +39,7 @@ No activation or PowerShell execution-policy changes are required. `launch.ps1` 
 ## Offline workflow
 
 1. Leave **Simulation** selected. Choose Normal idle, Warming up or another scenario. Press **Start Simulation**. Allow around four seconds for rate-limited initialization and support discovery.
-2. The banner says **SIMULATED**. Initial idle values are approximately 780 RPM, 54 °C and 30% load; these are synthetic fixtures, never vehicle observations.
+2. The persistent source label says **SIMULATION — synthetic data** and identifies the scenario. Initial idle values are approximately 780 RPM, 54 °C and 30% load; these are synthetic fixtures, never vehicle observations.
 3. Choose sensors under **Dashboard → Sensor selection**; drag them to reorder. Select an ECU explicitly when multiple responses are present. Alternate display units do not change stored base units.
 4. Press **Start Recording**. You can start recording before Connect to retain initialization and support bitmaps as well. **Finish recording** closes the journal and marks the session ended.
 5. In **Sessions**, Refresh, select a session, then Export CSV or Export JSONL. Default JSONL exports redact adapter/port identification; diagnostic support export includes originals.
