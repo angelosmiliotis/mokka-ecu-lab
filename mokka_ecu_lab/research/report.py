@@ -12,7 +12,8 @@ from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 
 RECOMMENDATIONS=[
     'Start recording before Connect; complete Discovery while stationary and choose the ECU actually observed.',
-    'Manually opt into 017A RAW, documented 0188 (or optional RAW override), 0183 NOx, 0185 AdBlue and RPM/MAF/speed when supported.',
+    'While parked, choose Full Auto Research Drive and give one preset RAW consent. All eligible existing standard PIDs, including NOx and eligible RAW targets, are selected automatically. Manual choices remain available.',
+    'Before departure inspect worker scheduling and at least two stored six-byte 017A RAW positives when eligible; PARTIAL is an evidence warning, not a health or safety certificate.',
     'Retain complete raw bytes and asynchronous context timestamps/age. Obtain independent reference readings, units and uncertainty before interpreting a pressure hypothesis.',
     'The driver must not interact with the laptop while driving. Finish/Disconnect after parking.',
     'Read-only preparation only: no additional requests, scans, unsupported PID selection, regeneration or rate change. Aggregate ceiling remains 4 application commands/s.']
@@ -111,6 +112,12 @@ def render_html(report,selection=None,detailed=False):
             parts.extend(['</tbody></table></div>', '<h3>DPF 017A limitation</h3>',
                 '<p>The six-byte layout remains numerically UNVERIFIED. Preserve complete RAW evidence without inserting/removing bytes. No pressure, blockage percentage or filter condition is inferred.</p>',
                 '<h3>SCR, AdBlue and NOx recorded evidence</h3>'])
+            if g.get('capture_coverage'):
+                parts.append('<h3>Planned and observed capture coverage</h3><p>All-session positive replies and recorded RAW-only frames are separate from post-activation automatic counts. Legacy sessions lack a selection receipt; no missing plan is invented.</p><div class="scroll"><table><tr>'+''.join('<th>'+v+'</th>' for v in ('PID','All positive replies','Recorded RAW-only','Worker weight','Actual automatic positives','Observed mean interval','Plan evidence'))+'</tr>')
+                for row in g['capture_coverage']:
+                    values=[row.get(k) for k in ('pid','positive_responses','recorded_raw_only_positive_count','requested_weight','actual_auto_capture_samples','observed_auto_capture_interval','plan_evidence')]
+                    parts.append('<tr>'+''.join('<td>'+escape(v if v is not None else 'UNKNOWN')+'</td>' for v in values)+'</tr>')
+                parts.append('</table></div><p>Acquisition quality: '+escape(session.get('acquisition_quality',{}))+'</p>')
             parts.extend('<p>'+escape(line)+'</p>' for line in summary_lines(g['scr_summary'],detailed))
             parts.append('<h3>Missing provenance and contradictions</h3>')
             messages=session['missing_evidence']+g['missing_evidence']+session['contradictions']+session['transaction_errors']

@@ -28,7 +28,7 @@ MAX_PREVIEW = 2000
 MAX_GROUPS = 128
 MEMBERS = frozenset({'raw-redacted.jsonl','measurements.csv','discovery-report.json',
     'session-summary.json','pid-support.json','ecu-identifiers.json','polling-statistics.json',
-    'errors.json','markers.json','manifest.json','SHA256SUMS.txt','raw-observations.json'})
+    'errors.json','markers.json','manifest.json','SHA256SUMS.txt','raw-observations.json','acquisition-receipt.json'})
 REQUIREMENTS = [
     '017A six-byte layout: obtain an authoritative byte definition and identified calibration applicability; retain bytes without padding or shifting.',
     'Pair any proposed pressure formula with independent diagnostic or physical reference measurements, units, timestamps and uncertainty.',
@@ -44,7 +44,7 @@ def observation_state(source, count):
 
 def matrix_entry(pid):
     return dict(pid=f'{pid:02X}',request=f'01{pid:02X}',valid_framing=0,invalid_framing=0,
-        negative_responses=0,positive_response_count=0,layout_mismatches=0,
+        negative_responses=0,positive_response_count=0,recorded_raw_only_positive_count=0,layout_mismatches=0,
         lengths=Counter(),field_states={},support_flags=Counter(),byte_changes=Counter(),
         semantic_warnings=[],bitmap_evidence_states=Counter(),status='UNVERIFIED_LAYOUT')
 
@@ -239,6 +239,7 @@ def analyze_bundles(paths):
                 if reply.negative_code is not None:
                     e['negative_responses'] += 1; continue
                 payload = reply.data; e['lengths'][len(payload)] += 1; e['positive_response_count'] += 1
+                e['recorded_raw_only_positive_count'] += bool(record.get('raw_only'))
                 prior = g['last'].get(pid)
                 if prior is not None:
                     for i in range(max(len(prior),len(payload))):
@@ -309,7 +310,22 @@ def analyze_bundles(paths):
                 missing_evidence=sorted(set(g['missing'])))
             result_group['scr_summary']=scr_summary(dict(g,matrix=matrix))
             output.append(result_group)
+        receipt=json.loads(members['acquisition-receipt.json']) if 'acquisition-receipt.json' in members else summary.get('acquisition_receipt')
+        for g in output:
+            scoped=receipt if isinstance(receipt,dict) and all(receipt.get(k)==g[k] for k in ('ecu','mode','source_kind')) else {}
+            g['capture_coverage']=[dict(pid=row['pid'],positive_responses=row['positive_response_count'],
+                recorded_raw_only_positive_count=row.get('recorded_raw_only_positive_count',0),
+                requested_weight=scoped.get('effective_schedule',{}).get(row['pid'],{}).get('weight'),
+                actual_auto_capture_samples=scoped.get('observed',{}).get(row['pid'],{}).get('positive_samples'),
+                observed_auto_capture_interval=scoped.get('observed',{}).get(row['pid'],{}).get('mean_interval_seconds'),
+                plan_evidence='WORKER_RECEIPT' if scoped else 'LEGACY_NO_SELECTION_RECEIPT')
+                for row in g['matrix'] if int(row['pid'],16) not in BITMAP_PIDS]
         sessions.append(dict(evidence_id=identity,checksum_verified=True,recorded_decoder_versions=summary.get('decoder_versions',[]),
+            acquisition_receipt=receipt,
+            acquisition_quality=dict(recorded_status_counts=dict(Counter(r.get('status','UNKNOWN') for r in records)),
+                transport_failures=sum(r.get('status')=='TRANSPORT_ERROR' for r in records),
+                intentional_cancellations=sum(r.get('status')=='CANCELLED' for r in records),
+                current_decoder_layout_mismatches=sum(r['layout_mismatches'] for g in output for r in g['matrix'])),
             groups=output,transactions=len(records),missing_evidence=missing,
             contradictions=sorted(set(contradictions)),transaction_errors=transaction_errors,
             note='Offline re-decoding uses current definitions; original CSV/journal and historical decoder versions are unchanged.'))
