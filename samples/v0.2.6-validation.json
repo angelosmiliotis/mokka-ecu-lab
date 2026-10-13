@@ -1,0 +1,98 @@
+{
+  "version": "0.2.6",
+  "private_input_used": false,
+  "tests": {
+    "passed": 382,
+    "failed": 0,
+    "process_exit": 0,
+    "seconds": 137.17,
+    "added_workflow_tests": 18
+  },
+  "native": {
+    "source": "SIMULATED",
+    "major_page_scaling_checks": 84,
+    "physical_sizes": [
+      [
+        1280,
+        720
+      ],
+      [
+        1366,
+        768
+      ],
+      [
+        1536,
+        864
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "controlled_qt_pixel_ratios": [
+      1,
+      1.25,
+      1.5
+    ],
+    "screenshots_visually_inspected": true,
+    "workflow": {
+      "transaction_status_counts": {
+        "OK": 78,
+        "CANCELLED": 2,
+        "INVALID": 1
+      },
+      "private_input_used": false,
+      "hardware_connected": false,
+      "recording_before_connection": true,
+      "worker_confirmed_steps": true,
+      "basic_polling_current_in_both_views": true,
+      "stopped_values_stale": true,
+      "resume_basic_polling": true,
+      "explicit_discovery": true,
+      "raw_nox_opt_ins": true,
+      "monitoring_errors": 0,
+      "closed_session": true,
+      "finish_keeps_adapter_connected": true,
+      "successful_bundle_receipt": true,
+      "source_change_discards_previous_values": true,
+      "live_preparation_no_connection": true,
+      "requests": 81,
+      "aggregate_rate_limit": 4.0
+    },
+    "raw_capture": {
+      "requests": [
+        "017A",
+        "0188"
+      ],
+      "unchecked_initial_nox_raw": true,
+      "monitoring_errors": 0,
+      "expected_discovery_layout_mismatches": 1,
+      "bundle_members": 12,
+      "bundle_checksums_verified": true,
+      "original_journal_unchanged": true,
+      "trend_charts": 6,
+      "private_html_json_export": true
+    }
+  },
+  "packaged": {
+    "gui_exit": 0,
+    "offline_analyzer_exit": 0,
+    "requests": 11,
+    "errors": 0,
+    "closed_sessions": 1,
+    "compiled_source_modules_match": 30,
+    "json_exact_source_match": true,
+    "html_exact_source_match": true,
+    "internal_directory_preserved": true
+  },
+  "invariants": {
+    "worker_transport_scheduler_unchanged": true,
+    "read_only_allowlists_unchanged": true,
+    "aggregate_max_requests_per_second": 4,
+    "manufacturer_live_queries": false,
+    "numeric_decoders_unchanged": true,
+    "offline_analyzer_unchanged": true,
+    "cloud_telemetry": false,
+    "real_hardware_verified": false
+  }
+}
