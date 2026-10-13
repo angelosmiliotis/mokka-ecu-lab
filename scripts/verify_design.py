@@ -14,12 +14,17 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bundle',type=Path,required=True)
 parser.add_argument('--output-dir',type=Path,required=True)
 parser.add_argument('--scale',type=float,default=1)
+parser.add_argument('--full-auto',action='store_true',help='Exercise the deliberate Full Auto preset with synthetic input')
 args=parser.parse_args(); output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
 report=analyze_bundles([args.bundle])
 assert all(g['source_kind']=='SIMULATED' for s in report['sessions'] for g in s['groups']), 'Synthetic simulation input only'
 app=QApplication([]); ui=MainWindow(output/'synthetic-data'); ui.research_view.set_report(report)
-ui.scenario.setCurrentText('Diesel alternative layouts'); ui.show(); ui.send('record'); ui.connect_adapter()
-started=time.monotonic(); stage='connect'; results=[]
+ui.scenario.setCurrentText('Diesel alternative layouts'); ui.show()
+if args.full_auto:
+    ui.auto_consent.setChecked(True); ui.auto_start.click(); stage='auto'
+else:
+    ui.send('record'); ui.connect_adapter(); stage='connect'
+started=time.monotonic(); results=[]
 
 
 def capture_pages():
@@ -60,7 +65,9 @@ def tick():
     try:
         ui.drain()
         if time.monotonic()-started>50: raise AssertionError('Native design validation deadline')
-        if stage=='connect' and ui.connected:
+        if stage=='auto' and ui.auto_receipt.get('state')=='READY':
+            ui.finish_session(); stage='finished'
+        elif stage=='connect' and ui.connected:
             ui.send('discover',ecu=ui.source_key()); stage='discover'
         elif stage=='discover' and ui.discovery_prepared and not ui.discovery_active:
             ui.prepare_capture(); ui.send('start'); stage='samples'
