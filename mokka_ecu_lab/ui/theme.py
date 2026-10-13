@@ -6,20 +6,23 @@ COLORS = dict(canvas='#10161d', sidebar='#131c25', surface='#19232e', raised='#2
               border='#30404f', text='#e8edf2', muted='#a4b3c2', accent='#77d5c6',
               selected='#24443f', warning='#e7bd7d', error='#f1a5a5')
 SPACING = dict(xs=4, small=8, medium=12, large=20)
-METRICS = dict(radius=6, control=32, row=32, icon=20, sidebar=188, compact_sidebar=56)
+METRICS = dict(radius=6, control=32, row=34, icon=20, sidebar=188, compact_sidebar=56)
+TYPE = dict(body=14, caption=12, badge=12, title=22, step=12, bytes=13)
 
 
 def stylesheet():
     c = COLORS
     return f"""
-    QWidget {{ color: {c['text']}; font-family: 'Segoe UI'; font-size: 13px; }}
+    QWidget {{ color: {c['text']}; font-family: 'Segoe UI'; font-size: {TYPE['body']}px; }}
     QMainWindow, QScrollArea, QScrollArea > QWidget > QWidget {{ background: {c['canvas']}; }}
     QWidget#sidebar {{ background: {c['sidebar']}; border-right: 1px solid {c['border']}; }}
     QFrame#panel, QFrame#sensorCard {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 6px; }}
     QLabel#brand {{ font-size: 16px; font-weight: 700; letter-spacing: 1px; }}
-    QLabel#pageTitle {{ font-size: 21px; font-weight: 600; }}
+    QLabel#pageTitle {{ font-size: {TYPE['title']}px; font-weight: 600; }}
     QLabel#muted, QLabel#caption {{ color: {c['muted']}; }}
-    QLabel#caption {{ font-size: 11px; }}
+    QLabel#caption {{ font-size: {TYPE['caption']}px; }}
+    QLabel#sourceIdentity {{ color: {c['accent']}; font-weight: 600; }}
+    QLabel#nextActionTitle {{ font-size: 16px; font-weight: 600; }}
     QLabel#sensorValue {{ font-size: 27px; font-weight: 600; }}
     QLabel#badge {{ background: {c['surface']}; border-radius: 4px; padding: 5px 8px; font-size: 12px; }}
     QPushButton {{ background: {c['raised']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 6px 11px; min-height: 18px; }}
@@ -31,12 +34,17 @@ def stylesheet():
     QPushButton#primary:hover {{ background: #305b52; }}
     QPushButton#primary:disabled {{ background: #1a232d; color: #8593a0; border-color: #29343f; }}
     QPushButton#stop {{ color: {c['warning']}; }}
+    QPushButton#stop:disabled {{ color: #8593a0; background: #1a232d; border-color: #29343f; }}
     QPushButton#nav {{ text-align: left; border: 0; padding: 9px 12px; background: transparent; }}
     QPushButton#nav:hover {{ background: {c['raised']}; }}
     QPushButton#nav:checked {{ background: {c['selected']}; color: #baf1e7; }}
     QPushButton#nav:focus {{ border: 1px solid {c['accent']}; }}
-    QPushButton#step {{ font-size: 12px; padding: 5px 6px; }}
-    QPushButton#step:checked {{ color: #baf1e7; border-color: #548e84; background: {c['selected']}; }}
+    QPushButton#step {{ font-size: {TYPE['step']}px; padding: 5px 6px; background: {c['surface']}; }}
+    QPushButton#step[workflowState="COMPLETED"] {{ color: #baf1e7; border-color: #548e84; background: {c['selected']}; }}
+    QPushButton#step[workflowState="CURRENT"] {{ color: {c['warning']}; border: 2px solid {c['warning']}; background: {c['surface']}; }}
+    QPushButton#step[workflowState="IN_PROGRESS"] {{ color: {c['accent']}; border-color: {c['accent']}; background: {c['raised']}; }}
+    QPushButton#step[workflowState="BLOCKED"], QPushButton#step[workflowState="NOT_STARTED"] {{ color: {c['muted']}; }}
+    QPushButton#step:focus {{ border: 2px solid {c['text']}; }}
     QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 4px; padding: 5px 7px; min-height: 18px; selection-background-color: {c['selected']}; }}
     QComboBox QAbstractItemView {{ background: {c['raised']}; selection-background-color: {c['selected']}; }}
     QTabWidget::pane {{ border: 0; }}
@@ -47,7 +55,7 @@ def stylesheet():
     QTableWidget::item, QListWidget::item {{ padding: 4px; }}
     QTableWidget::item:selected, QListWidget::item:selected {{ background: {c['selected']}; color: {c['text']}; }}
     QTableWidget:focus, QListWidget:focus, QTextEdit:focus {{ border-color: {c['accent']}; }}
-    QTextEdit#byteText {{ font-family: 'Consolas'; font-size: 12px; }}
+    QTextEdit#byteText {{ font-family: 'Consolas'; font-size: {TYPE['bytes']}px; }}
     QGroupBox {{ border: 1px solid {c['border']}; border-radius: 6px; margin-top: 14px; padding: 12px; }}
     QGroupBox::title {{ subcontrol-origin: margin; left: 12px; color: {c['muted']}; }}
     QToolTip {{ background: {c['raised']}; color: {c['text']}; border: 1px solid #657b8c; padding: 6px; }}

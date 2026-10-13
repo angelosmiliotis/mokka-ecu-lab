@@ -25,12 +25,13 @@ from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.adapter.scheduling import priority_weights, nominal_interval
 from mokka_ecu_lab.capture import capture_plan, manual_options, DRIVE_WEIGHTS
 from mokka_ecu_lab.logging.bundle import export_research_bundle
-from mokka_ecu_lab.layouts import RAW_ONLY_PIDS
+from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, raw_eligibility
 from mokka_ecu_lab.analysis.trends import load_trends
 from .trends import TrendsDialog
 from .research import ResearchView
-from .theme import stylesheet, style_table, style_chart, icon
+from .theme import stylesheet, style_table, style_chart, icon, COLORS
 from .components import Sidebar, SensorCard, CaptureStepper, FlowLayout, caption, page_heading, scroll_page
+from .presentation import StepState, HUMAN_NAMES, source_description, measurement_status
 from mokka_ecu_lab import __version__
 
 STYLE = stylesheet()
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self.capture_raw_pids = set()
         self.capture_ecu = None
         self.capture_history = {}
+        self.capture_monitor_errors = 0
         self.warning_history = {}
         self.last_recording_id = None
         self.discovery_reason = 'No discovery started'
@@ -88,6 +90,13 @@ class MainWindow(QMainWindow):
         self.recording_started = None
         self.request_count = self.error_count = 0
         self.connected = False
+        self.adapter_open = False
+        self.connection_phase = 'Disconnected'
+        self.connection_protocol = ''
+        self.accept_transactions = True
+        self.pending_actions = {}
+        self.exported_session_id = None
+        self.bundle_destination = None
         self.polling_active = False
         self.user_paused = False
         self.requires_reconnect = False
@@ -149,18 +158,19 @@ class MainWindow(QMainWindow):
         if action in {'discover','monitor_discovery','drive_capture'}:
             self.user_paused = False
         if action == 'discover': self.polling_active = False
-        if action in {'stop','disconnect','replay','shutdown','connect'}:
-            self.discovery_active = False
-            self.capture_active = False
         if action in {"stop", "disconnect", "replay", "shutdown", "connect"}:
             self.polling_active = False
             self.user_paused = action != "connect"
             self.acquisition_reason = "Polling stopped by user" if action == "stop" else "Connection changing / offline"
         elif action == "start":
             self.user_paused = False
-            self.capture_active = False
-        try: self.worker.submit(action, **kwargs)
+        try:
+            self.worker.submit(action, **kwargs)
+            if action in {'connect','record','record_stop','discover','drive_capture','stop','disconnect','start'}:
+                self.pending_actions[action] = self.context_id
+            if action == 'disconnect': self.pending_actions.pop('connect', None)
         except Exception as exc: self.notice(str(exc))
+        if hasattr(self, 'capture_next'): self.refresh_presentation(); self.update_capture()
 
     def finish_session(self):
         self.send("stop")
@@ -173,13 +183,14 @@ class MainWindow(QMainWindow):
     def build_connection(self, layout):
         self.connection_panel = QFrame(); self.connection_panel.setObjectName('panel')
         panel = QVBoxLayout(self.connection_panel); panel.setContentsMargins(12, 8, 12, 8); panel.setSpacing(6)
-        row = QHBoxLayout(); row.setSpacing(8)
+        row = FlowLayout(spacing=8)
         self.source = QComboBox(); self.source.addItems(["Simulation", "Bluetooth / Serial LIVE"])
         self.source.setAccessibleName('Connection source'); self.source.setMinimumWidth(170)
         self.port = QComboBox(); self.port.setEditable(True); self.port.setMinimumContentsLength(6)
         self.port.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.port.setMaximumWidth(180); self.port.setAccessibleName('Outgoing serial port')
         self.port.currentIndexChanged.connect(lambda i: self.port.setToolTip(self.port.itemData(i, Qt.ItemDataRole.ToolTipRole) or "Manual outgoing serial port"))
+        self.port.editTextChanged.connect(self.update_connection_controls)
         self.baud = QComboBox(); self.baud.addItems(["115200", "38400", "9600"]); self.baud.setAccessibleName('Serial baud rate')
         self.scenario = QComboBox(); self.scenario.addItems(SCENARIOS); self.scenario.setAccessibleName('Simulation scenario')
         self.scenario.setMinimumContentsLength(12); self.scenario.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -197,13 +208,14 @@ class MainWindow(QMainWindow):
         self.start_button = self.button("Resume polling", lambda: self.send("start"))
         for w in (self.source, self.live_config, self.sim_config, self.connect_button, self.disconnect_button): row.addWidget(w)
         row.addStretch(); panel.addLayout(row)
-        row2 = QHBoxLayout()
+        row2 = FlowLayout()
         safety=caption('READ ONLY  ·  Maximum 4 requests/s'); safety.setWordWrap(False); row2.addWidget(safety)
         self.advanced_connection = self.button('Rate settings', lambda: self.rate.setVisible(not self.rate.isVisible()))
         row2.addWidget(self.advanced_connection); row2.addWidget(self.rate); self.rate.hide(); row2.addStretch()
         row2.addWidget(self.stop_button); row2.addWidget(self.start_button); panel.addLayout(row2)
         layout.addWidget(self.connection_panel)
-        self.source.currentIndexChanged.connect(self.update_connection_controls); self.update_connection_controls()
+        self.source.currentIndexChanged.connect(self.source_selection_changed)
+        self.scenario.currentIndexChanged.connect(self.source_selection_changed); self.update_connection_controls()
 
     def toggle_connection(self):
         self.connection_panel.setVisible(not self.connection_panel.isVisible())
@@ -216,18 +228,42 @@ class MainWindow(QMainWindow):
     def update_connection_controls(self):
         live = self.source.currentIndex() == 1
         self.live_config.setVisible(live); self.sim_config.setVisible(not live)
-        changing = self.connected or self.mode == 'Connecting'
+        changing = self.connected or self.adapter_open or self.mode == 'Connecting' or 'connect' in self.pending_actions
         self.port.setEnabled(live and not changing); self.baud.setEnabled(live and not changing)
         self.scenario.setEnabled(not live and not changing); self.source.setEnabled(not changing)
         self.refresh_port_button.setEnabled(live and not changing)
-        self.connect_button.setText('Connected' if self.connected else 'Connecting…' if self.mode == 'Connecting' else 'Connect' if live else 'Start Simulation')
+        self.connect_button.setText('Connected' if self.connected else 'Connecting…' if self.mode == 'Connecting' or 'connect' in self.pending_actions else 'Adapter connected' if self.adapter_open else 'Connect' if live else 'Start Simulation')
         if hasattr(self,'greek') and self.greek.isChecked():
             self.connect_button.setText('Συνδέθηκε' if self.connected else 'Σύνδεση…' if self.mode=='Connecting' else 'Σύνδεση')
-        self.connect_button.setEnabled(not changing)
+        self.connect_button.setEnabled(not changing and (not live or bool(self.port.currentText().strip())))
+        self.connect_button.setToolTip('Disconnect the current adapter first' if self.adapter_open else
+                                      'LIVE: choose an outgoing Bluetooth / Serial port; connection does not certify vehicle compatibility' if live else
+                                      'Explicitly start synthetic simulation; no vehicle is connected')
         self.disconnect_button.setEnabled(changing)
         self.stop_button.setEnabled(self.polling_active or self.discovery_active)
-        self.start_button.setEnabled(self.connected and not self.polling_active and not self.requires_reconnect and not self.discovery_active)
+        self.start_button.setEnabled(self.connected and not self.polling_active and not self.requires_reconnect and not self.discovery_active and not any(a in self.pending_actions for a in ('start','stop')))
         self.start_button.setToolTip('Reconnect explicitly after an acquisition failure' if self.requires_reconnect else 'Resume basic polling on the current connection')
+        self.stop_button.setToolTip('Stop acquisition; recording is independent. Receive cancellation may require reconnect.' if self.stop_button.isEnabled() else 'Polling and Discovery are already stopped')
+        self.disconnect_button.setToolTip('Close the adapter and finalize any active recording' if changing else 'No open adapter connection to disconnect')
+
+    def source_selection_changed(self, *args):
+        if hasattr(self, 'capture_list') and self.mode!='REPLAY' and not self.connected and not self.adapter_open and 'connect' not in self.pending_actions:
+            self.mode = 'Disconnected'
+            self.accept_transactions = False
+            self.readings.clear(); self.signal_values.clear(); self.history.clear(); self.sensor_errors.clear()
+            self.support.clear(); self.support_pages.clear(); self.discovery_observations.clear()
+            self.discovery_prepared = False; self.discovery_target = None
+            self.capture_plan_ecu = None; self.capture_list.clear(); self.capture_history.clear(); self.warning_history.clear()
+            self.discovery_active=False; self.capture_active=False; self.capture_weights.clear(); self.capture_raw_pids.clear()
+            self.capture_monitor_errors=0; self.request_count=self.error_count=0
+            self.raw_records.clear(); self.raw_table.setRowCount(0)
+            self.capture_status.setText('No Discovery in this source selection. Connect explicitly; earlier sessions remain in Sessions.')
+            self.exported_session_id = None; self.bundle_destination = None
+            if not self.recording_id: self.last_recording_id = None
+            self.ecu.clear(); self.ecu.addItem('Automatic first responding ECU', '')
+            for check in self.capture_raw_checks.values(): check.setChecked(False); check.setEnabled(False)
+        self.update_connection_controls()
+        if hasattr(self, 'capture_next'): self.update_measurements(); self.update_capture(); self.refresh_presentation()
 
     def refresh_ports(self):
         current = self.port.currentText().strip()
@@ -240,6 +276,7 @@ class MainWindow(QMainWindow):
         except Exception as exc: self.port.addItem("COM4", "COM4"); self.notice(str(exc))
 
     def connect_adapter(self):
+        self.accept_transactions = False
         self.readings.clear(); self.support.clear(); self.history.clear(); self.sensor_errors.clear(); self.ecu.clear(); self.ecu.addItem("Automatic first responding ECU", "")
         self.support_pages.clear()
         self.mode = "Connecting"
@@ -254,9 +291,9 @@ class MainWindow(QMainWindow):
     def build_dashboard(self):
         tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0, 4, 0, 0); layout.setSpacing(8)
         page_heading(layout, 'Vehicle overview', 'Measured signals, with source and freshness. Availability never implies component health.')
-        row = QHBoxLayout()
+        row = FlowLayout()
         self.ecu = QComboBox(); self.ecu.addItem("Automatic first responding ECU", ""); self.ecu.setAccessibleName('Selected ECU')
-        self.record_button = self.button("Start recording", lambda: self.send("record"), "primary")
+        self.record_button = self.button("Start recording", self.start_recording, "primary")
         self.record_stop_button = self.button("Finish recording", lambda: self.send("record_stop"))
         self.focus_dashboard = QCheckBox('Focused capture'); self.focus_dashboard.setToolTip('At most seven indications from supported evidence; no automatic requests')
         for w in (QLabel('ECU'), self.ecu, self.focus_dashboard, self.record_button, self.record_stop_button): row.addWidget(w)
@@ -337,8 +374,8 @@ class MainWindow(QMainWindow):
     def build_sessions(self):
         tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0)
         page_heading(layout, 'Recorded sessions', 'Local journals and measurements. Finish a recording before creating an evidence bundle.')
-        row = QHBoxLayout()
-        self.session_record_button=self.button('Start recording',lambda:self.send('record'))
+        row = FlowLayout()
+        self.session_record_button=self.button('Start recording',self.start_recording)
         self.session_finish_button=self.button('Finish recording',lambda:self.send('record_stop'))
         row.addWidget(self.session_record_button); row.addWidget(self.session_finish_button)
         for label, callback in [("Refresh", self.refresh_sessions), ("Replay selected", self.replay_session), ("Open replay…", self.open_replay)]: row.addWidget(self.button(label, callback))
@@ -358,7 +395,7 @@ class MainWindow(QMainWindow):
         self.diagnostic_export.setToolTip('Private identifying metadata. Redaction is enabled by default. Review before sharing.'); layout.addWidget(self.diagnostic_export)
         layout.addWidget(caption('Files stay on this computer. No automatic uploads. VIN is never queried; adapter metadata is redacted by default.'))
         self.session_info = caption(str(self.root)); layout.addWidget(self.session_info)
-        controls = QHBoxLayout(); self.replay_speed = QComboBox(); self.replay_speed.addItems(["1× original", "2×", "5×", "10×"])
+        controls = FlowLayout(); self.replay_speed = QComboBox(); self.replay_speed.addItems(["1× original", "2×", "5×", "10×"])
         controls.addWidget(QLabel('Offline replay')); controls.addWidget(self.replay_speed)
         controls.addWidget(self.button("Play", lambda: self.send("replay_play", speed=[1., 2., 5., 10.][self.replay_speed.currentIndex()])))
         controls.addWidget(self.button("Pause replay", lambda: self.send("stop")))
@@ -371,6 +408,7 @@ class MainWindow(QMainWindow):
         for button in (self.csv_button, self.jsonl_button): button.setEnabled(bool(session))
         if session:
             self.session_info.setText(f"Selected {session['id'][:12]} · {session['mode']} · {session['requests']} transactions · " + ('Closed' if session['ended'] else 'Open / interrupted') + f" · Stored in {self.root}")
+        self.update_capture()
 
     def open_private_report(self):
         self.tabs.setCurrentIndex(4); self.research_view.tabs.setCurrentIndex(1)
@@ -438,14 +476,16 @@ class MainWindow(QMainWindow):
     def bundle_export(self,latest=False):
         if self.recording_id: return self.notice('Finish session / Stop Recording before exporting')
         self.refresh_sessions()
-        session = next((s for s in self.sessions if s['id']==self.last_recording_id),None) if latest else self.current_session()
-        session = session or self.current_session() or (self.sessions[0] if self.sessions else None)
+        session = self.latest_closed_session() if latest else self.current_session()
         if not session or not session['ended']: return self.notice('Select a closed session; use Finish session first')
         path,_ = QFileDialog.getSaveFileName(self,'Export Research Bundle',str(self.root/(session['id']+'-research.zip')),'ZIP (*.zip)')
         if path:
             try:
                 export_research_bundle(self.root,session['id'],Path(path))
-                self.notice(f'Research Bundle saved locally: {path} · redacted evidence with SHA-256 checksums; original journal unchanged.')
+                self.exported_session_id = session['id']; self.bundle_destination = str(Path(path).resolve())
+                self.notice(f'Private Research Bundle saved locally: {self.bundle_destination} · SHA-256 checksums; original journal unchanged.')
+                self.session_info.setText(f'Private diagnostic evidence saved: {self.bundle_destination}')
+                self.update_capture()
             except Exception as exc: self.notice(str(exc))
 
     def build_raw(self):
@@ -655,21 +695,35 @@ class MainWindow(QMainWindow):
         page_heading(layout, 'Drive capture', 'Prepare while stationary. During a journey, use passive monitoring; a passenger operates the laptop.')
         self.capture_stepper = CaptureStepper(self.show_capture_step); layout.addWidget(self.capture_stepper)
         self.capture_step_help = caption('Record before connecting to preserve initialization evidence. Each action starts only when you press its button.'); layout.addWidget(self.capture_step_help)
+        next_panel=QFrame(); next_panel.setObjectName('panel'); next_row=QHBoxLayout(next_panel)
+        next_text=QVBoxLayout(); title=QLabel('Next recommended action'); title.setObjectName('nextActionTitle'); next_text.addWidget(title)
+        self.capture_next_help=caption('Select a source and connect explicitly.'); next_text.addWidget(self.capture_next_help)
+        next_row.addLayout(next_text,1); self.capture_next=self.button('Connection settings',self.perform_next_capture_action,'primary'); next_row.addWidget(self.capture_next)
+        layout.addWidget(next_panel)
+        self.capture_identity=QLabel(); self.capture_identity.setObjectName('sourceIdentity'); self.capture_identity.setWordWrap(True); layout.addWidget(self.capture_identity)
+        recording_row=FlowLayout()
+        self.capture_record=self.button('Start recording',self.start_recording)
+        self.capture_record_stop=self.button('Finish recording',lambda:self.send('record_stop'))
+        self.capture_recording_note=caption('Recording Off'); self.capture_recording_note.setWordWrap(False); recording_row.addWidget(self.capture_recording_note)
+        recording_row.addWidget(self.capture_record); recording_row.addWidget(self.capture_record_stop); layout.addLayout(recording_row)
         controls=FlowLayout(); self.capture_source=QComboBox(); self.capture_source.setModel(self.ecu.model())
         self.capture_source.currentIndexChanged.connect(self.ecu.setCurrentIndex); self.ecu.currentIndexChanged.connect(self.capture_source.setCurrentIndex)
         self.capture_preset=self.button('Prepare recommended preset',self.prepare_capture)
-        self.capture_start=self.button('Start Drive Capture',self.start_capture,'primary')
+        self.capture_start=self.button('Start Drive Capture',self.start_capture)
         self.capture_bundle=self.button('Export Research Bundle',lambda:self.bundle_export(latest=True))
-        for w in (QLabel('ECU'),self.capture_source,self.capture_preset,self.capture_start,self.button('Finish session',self.finish_session),self.capture_bundle): controls.addWidget(w)
+        self.capture_finish=self.button('Finish session',self.finish_session,'stop')
+        for w in (QLabel('ECU'),self.capture_source,self.capture_preset,self.capture_start,self.capture_finish,self.capture_bundle): controls.addWidget(w)
         layout.addLayout(controls)
         self.capture_status=caption('Complete standard discovery before preparing a drive preset.'); layout.addWidget(self.capture_status)
         self.capture_summary=caption('Capture not started'); layout.addWidget(self.capture_summary)
+        self.capture_technical=QCheckBox('Technical details · PID, weights, intervals, gaps and original evidence')
+        self.capture_technical.toggled.connect(self.capture_view_changed); layout.addWidget(self.capture_technical)
         self.capture_sections=QTabWidget(); layout.addWidget(self.capture_sections,1)
         monitor=QWidget(); m=QVBoxLayout(monitor); m.setContentsMargins(0,8,0,0)
         self.capture_table=table(['Measurement','Value','Units','State / evidence','Observed mean interval','Age / maximum gap','Weight'])
         self.capture_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.capture_table.horizontalHeader().setStretchLastSection(False)
-        for col,width in enumerate([220,130,55,430,145,160,65]): self.capture_table.setColumnWidth(col,width)
+        for col,width in enumerate([210,95,55,320,150,170,65]): self.capture_table.setColumnWidth(col,width)
         self.capture_table.setMinimumHeight(220); m.addWidget(self.capture_table,1)
         self.capture_focus=QCheckBox('Focused dashboard · at most seven readings'); m.addWidget(self.capture_focus)
         self.focus_dashboard.toggled.connect(self.capture_focus.setChecked); self.capture_focus.toggled.connect(self.focus_dashboard.setChecked)
@@ -685,7 +739,7 @@ class MainWindow(QMainWindow):
             check.setEnabled(False); check.stateChanged.connect(self.update_capture); self.capture_raw_checks[pid]=check; c.addWidget(check)
         self.capture_raw_detail=QTextEdit(); self.capture_raw_detail.setReadOnly(True)
         self.capture_omissions=QTextEdit(); self.capture_omissions.setReadOnly(True)
-        evidence_tabs=QTabWidget(); evidence_tabs.setMinimumHeight(150); evidence_tabs.addTab(self.capture_raw_detail,'Raw evidence'); evidence_tabs.addTab(self.capture_omissions,'Numeric omissions'); c.addWidget(evidence_tabs,1)
+        self.capture_evidence_tabs=QTabWidget(); self.capture_evidence_tabs.setMinimumHeight(150); self.capture_evidence_tabs.addTab(self.capture_raw_detail,'Raw evidence'); self.capture_evidence_tabs.addTab(self.capture_omissions,'Numeric omissions'); c.addWidget(self.capture_evidence_tabs,1)
         self.capture_sections.addTab(configure,'Configure & evidence')
         journey=QWidget(); j=QVBoxLayout(journey); marker_row=QHBoxLayout()
         self.journey_start=self.button('Journey Start',lambda:self.send('marker',event='Journey Start'))
@@ -696,7 +750,22 @@ class MainWindow(QMainWindow):
         j.addLayout(marker_row); self.marker_table=table(['Marker UTC','Event','Note / evidence']); j.addWidget(self.marker_table,1)
         j.addWidget(caption('Markers never send ECU requests. Page changes never finish recording. Finish session stops polling and closes recording; Disconnect also finalizes an open recording.'))
         self.capture_sections.addTab(journey,'Journey markers')
-        self.tabs.addTab(tab,'Drive Capture'); self.update_capture()
+        self.tabs.addTab(tab,'Drive Capture'); self.capture_view_changed(); self.update_capture()
+
+    def capture_view_changed(self, *args):
+        if not hasattr(self,'capture_evidence_tabs'): return
+        technical=self.capture_technical.isChecked()
+        self.capture_status.setVisible(technical)
+        for col in (4,5,6): self.capture_table.setColumnHidden(col,not technical)
+        self.capture_evidence_tabs.setVisible(technical)
+        self.capture_list.blockSignals(True)
+        for i in range(self.capture_list.count()):
+            item=self.capture_list.item(i); pid=item.data(Qt.ItemDataRole.UserRole)
+            sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
+            name=HUMAN_NAMES.get(pid,sensor.name)
+            item.setText(f'{name} · PID 01{pid:02X}'+(f' · weight {item.data(Qt.ItemDataRole.UserRole+1)}' if technical else '')+(' · optional NOx monitoring' if pid==0x83 else ''))
+        self.capture_list.blockSignals(False)
+        self.update_capture()
 
     def show_capture_step(self, stage):
         hints = ('Choose Simulation or LIVE in connection settings, then connect explicitly.',
@@ -724,6 +793,7 @@ class MainWindow(QMainWindow):
             sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
             item=QListWidgetItem(f'{sensor.name} / 01{pid:02X} · weight {weight}'+(' · NOx trend opt-in' if pid==0x83 else ''))
             item.setData(Qt.ItemDataRole.UserRole,pid); item.setFlags(item.flags()|Qt.ItemFlag.ItemIsUserCheckable)
+            item.setData(Qt.ItemDataRole.UserRole+1,weight); item.setToolTip(f'{sensor.name}\nPID 01{pid:02X} · existing schedule weight {weight}')
             item.setCheckState(Qt.CheckState.Checked if pid in preset['weights'] else Qt.CheckState.Unchecked)
             self.capture_list.addItem(item)
         for pid,check in self.capture_raw_checks.items():
@@ -736,6 +806,7 @@ class MainWindow(QMainWindow):
         self.capture_plan_ecu=ecu
         self.capture_omissions.setPlainText('\n'.join(f"01{e['pid']} {e['name']}: {e['reason']}" for e in options['omitted']) or 'All documented choices have valid support evidence.')
         self.capture_status.setText('Preset prepared; no requests started. Check choices, then press Start Drive Capture.')
+        self.capture_sections.setCurrentIndex(1); self.capture_view_changed()
         self.update_capture()
 
     def capture_selected(self):
@@ -754,13 +825,176 @@ class MainWindow(QMainWindow):
             return self.notice('ECU changed; prepare the Drive Capture preset for this ECU first')
         self.send('drive_capture',ecu=self.source_key(),pids=self.capture_selected(),raw_pids=self.raw_selected())
 
+    def source_identity(self):
+        active=self.connected or self.adapter_open or 'connect' in self.pending_actions or bool(self.readings or self.discovery_observations)
+        mode=self.mode if active or self.mode=='REPLAY' else 'Disconnected'
+        text=source_description(mode,live_selected=self.source.currentIndex()==1)
+        if 'SIMULATION' in text: text+=' · '+self.scenario.currentText()
+        elif text.startswith('LIVE'): text+=' · port '+(self.port.currentText().strip() or 'not selected')
+        return text
+
+    def start_recording(self):
+        self.notice(self.source_identity()+' · recording begins only after worker confirmation; initialization can be recorded before connection.')
+        self.send('record')
+
+    def acquisition_mode(self):
+        if self.mode=='REPLAY': return 'Replay'
+        if self.capture_active: return 'Drive Capture'
+        if self.discovery_active: return 'Discovery monitoring' if self.polling_active else 'Discovery'
+        return 'Basic polling'
+
+    def schedule_weights(self):
+        # Presentation of the existing scheduler, never a new scheduling model.
+        if self.capture_active: return dict(self.capture_weights) if self.capture_ecu==self.source_key() else {}
+        selected=[self.sensor_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.sensor_list.count())
+                  if self.sensor_list.item(i).checkState()==Qt.CheckState.Checked]
+        supported=set().union(*self.support.values()) if self.support else set()
+        weights=priority_weights([p for p in selected if p in supported],self.priorities if self.use_priorities.isChecked() else {})
+        if self.discovery_active and self.source_key()==self.discovery_target:
+            if not self.polling_active: return priority_weights(DISCOVERY_PIDS & self.support.get(self.discovery_target,set()),{},allow_discovery=True)
+            weights.update(priority_weights(DISCOVERY_PIDS & self.support.get(self.discovery_target,set()),{},allow_discovery=True))
+        return weights
+
+    def sample_presentation(self, pid, sample):
+        source=self.source_key(); replay=bool(sample.get('replay') or sample.get('mode','').startswith('REPLAY'))
+        raw=bool(sample.get('raw_only') or (pid in RAW_ONLY_PIDS and raw_eligibility(sample) and sample.get('layout_status')=='DECODER_UNVERIFIED'))
+        times=self.history.get((source,pid),[]) if pid in self.registry else self.capture_history.get((source,pid),[])
+        gaps=[b-a for a,b in zip(times,list(times)[1:]) if b>a]
+        weights=self.schedule_weights(); expected=nominal_interval(pid,weights,self.rate.value()) if pid in weights else 0
+        sent_at=sample.get('received_at')
+        if sent_at is None and sample.get('monotonic_ns') is not None: sent_at=sample['monotonic_ns']/1e9
+        supported=support_state(self.support.get(source,set()),self.support_pages.get(source,set()),pid)=='supported'
+        same_context=(sample.get('context_id',self.context_id)==self.context_id
+                      and (not sample.get('mode') or sample['mode']==self.mode)
+                      and sample.get('source_kind','UNKNOWN')==('SIMULATED' if self.mode=='SIMULATED' else 'ECU_READING'))
+        active=self.connected and not self.requires_reconnect and not self.user_paused and (self.polling_active or self.discovery_active)
+        valid=not sample.get('invalid') and not sample.get('stale_reason') and (not sample.get('error') or raw)
+        status=measurement_status(now=time.monotonic(),sent_at=sent_at,replay=replay,active=active,
+                                  scheduled=pid in weights and supported,valid=valid,same_context=same_context,
+                                  expected=expected,intervals=gaps)
+        acquisition=sample.get('acquisition_mode',self.acquisition_mode())
+        provenance=sample.get('source_kind','UNKNOWN'); origin='SIMULATED · synthetic' if provenance=='SIMULATED' else 'LIVE' if provenance=='ECU_READING' else 'UNKNOWN'
+        if replay: origin='REPLAY · '+origin
+        recorded=bool(self.recording_id and sample.get('recording_session')==self.recording_id)
+        reason=sample.get('stale_reason') or sample.get('error') or self.sensor_errors.get((source,pid),'')
+        if not status['current'] and not replay:
+            reason=reason or ('Reconnect required after communication failure' if self.requires_reconnect else
+                              'Disconnected' if not self.connected else 'Polling currently stopped' if not active else
+                              'PID not currently scheduled' if pid not in weights else 'No recent valid sample')
+        status.update(acquisition=acquisition,origin=origin,raw=raw,gaps=gaps,reason=reason,
+                      recording='Recorded in current session' if recorded else 'Not recorded in current session')
+        status['text']=status['label']+' · '+acquisition+' · '+origin
+        status['detail']=status['text']+'\n'+status['recording']+('\n'+reason if reason else '')
+        return status
+
+    def unavailable_reason(self, pid):
+        support=support_state(self.support.get(self.source_key(),set()),self.support_pages.get(self.source_key(),set()),pid)
+        if support=='unsupported':
+            return 'Not supported in selected simulation scenario' if self.mode=='SIMULATED' else 'Not supported by selected ECU'
+        if support=='unknown': return 'Support unknown · Discovery not completed for this ECU'
+        sample=self.discovery_observations.get((self.source_key(),pid),{})
+        if raw_eligibility(sample) and sample.get('layout_status')=='DECODER_UNVERIFIED': return 'RAW data available · No verified numeric decoder'
+        if sample.get('error'): return 'Invalid / unavailable · '+sample['error']
+        if sample: return 'No valid supported field / unavailable'
+        return 'No observed positive response · unavailable'
+
+    def latest_closed_session(self):
+        if self.last_recording_id:
+            return next((s for s in self.sessions if s['id']==self.last_recording_id and s['ended']),None)
+        return None
+
+    def capture_plan_status(self):
+        ready=self.connected and self.discovery_prepared and self.source_key()==self.discovery_target and not self.requires_reconnect
+        plan=capture_plan(self.support,self.support_pages,self.discovery_observations,self.source_key(),prepared=ready,
+                          selected=self.capture_selected(),raw_selected=self.raw_selected())
+        configured=ready and self.source_key()==getattr(self,'capture_plan_ecu',None) and bool(plan['weights'])
+        return ready,configured,plan
+
+    def workflow_presentation(self):
+        ready,configured,plan=self.capture_plan_status(); closed=self.latest_closed_session()
+        finalized=bool(closed and not self.recording_id and not self.polling_active and not self.discovery_active
+                       and not any(a in self.pending_actions for a in ('stop','record_stop')))
+        pending=bool(self.pending_actions)
+        if self.adapter_open and not self.connected and 'connect' not in self.pending_actions:
+            key='reconnect'
+        elif self.requires_reconnect and not self.recording_id and not finalized:
+            key='reconnect'
+        elif self.requires_reconnect and self.recording_id:
+            key='finish'
+        elif finalized:
+            key='done' if self.exported_session_id==closed['id'] else 'export'
+        elif self.capture_active and self.polling_active: key='finish'
+        elif not self.connected: key='connect'
+        elif not self.recording_id: key='record'
+        elif not ready: key='discover'
+        elif not configured: key='configure'
+        else: key='capture'
+        states=[(StepState.CURRENT if key=='reconnect' else StepState.COMPLETED if self.connected and self.source_key() in self.support else StepState.CURRENT if key=='connect' else StepState.AVAILABLE,
+                 'ECU response observed on this connection' if self.connected else 'Select a source and connect; serial opening alone is not ECU verification'),
+                (StepState.IN_PROGRESS if self.recording_id else StepState.CURRENT if key=='record' else StepState.AVAILABLE,
+                 'Worker confirmed an active recording' if self.recording_id else 'Recording Off. Start before connection to retain initialization evidence'),
+                (StepState.COMPLETED if ready else StepState.IN_PROGRESS if self.discovery_active else StepState.CURRENT if key=='discover' else StepState.BLOCKED,
+                 'Discovery completed for this ECU in this context' if ready else 'Connect to an identified ECU; explicitly run standard Discovery'),
+                (StepState.COMPLETED if configured else StepState.CURRENT if key=='configure' else StepState.AVAILABLE if ready else StepState.BLOCKED,
+                 f'{len(plan["weights"])} eligible configured PIDs; preparation sends nothing' if configured else 'Complete Discovery for this ECU, prepare and review eligible choices'),
+                (StepState.IN_PROGRESS if self.capture_active and self.polling_active else StepState.CURRENT if key=='capture' else StepState.AVAILABLE if configured else StepState.BLOCKED,
+                 'Worker acknowledged active Drive Capture' if self.capture_active else 'Eligible configured PID selection and current ECU Discovery are required'),
+                (StepState.COMPLETED if finalized else StepState.CURRENT if key=='finish' else StepState.AVAILABLE if self.recording_id else StepState.NOT_STARTED,
+                 'Polling stopped and the recording is confirmed closed' if finalized else 'Finish an active recording or capture; connection remains a separate action'),
+                (StepState.COMPLETED if finalized and self.exported_session_id==closed['id'] else StepState.CURRENT if key=='export' else StepState.AVAILABLE if closed else StepState.BLOCKED,
+                 f'Private bundle saved: {self.bundle_destination}' if finalized and self.exported_session_id==closed['id'] else 'A confirmed closed recording is required')]
+        self.capture_stepper.present(states); self.next_capture_action=key
+        descriptions={
+            'connect':('Connect' if self.source.currentIndex()==1 else 'Start Simulation','Choose the source above. You may start recording first to preserve initialization.'),
+            'reconnect':('Disconnect before reconnecting' if self.adapter_open or self.connected else 'Connect explicitly','Reconnect required after communication failure. Disconnect the adapter, then connect explicitly; no automatic retry.'),
+            'record':('Start recording','Recording is Off. '+self.source_identity()+'.'),
+            'discover':('Start standard Discovery','Explicit scan for ECU '+str(self.source_key())+'. No automatic Discovery.'),
+            'configure':('Prepare / review sensors','Prepare supported choices. NOx and RAW-only remain unchecked opt-ins.'),
+            'capture':('Start Drive Capture',f'{len(plan["weights"])} eligible PIDs. '+('Recording active.' if self.recording_id else 'Monitoring only; no session is being recorded.')),
+            'finish':('Finish session' if self.recording_id else 'Stop capture (not recording)','Drive Capture active. '+('Finish stops polling and closes the journal.' if self.recording_id else 'Monitoring only; no recording to export.')),
+            'export':('Export Research Bundle','Polling stopped; recording completed. '+('Adapter remains connected.' if self.adapter_open or self.connected else 'Adapter disconnected.')+' Export private diagnostic evidence.'),
+            'done':('Bundle exported','Private diagnostic evidence saved: '+str(self.bundle_destination))}
+        label,help_text=descriptions[key]
+        if key=='reconnect' and not self.requires_reconnect:
+            help_text='The adapter is open but no ECU response is confirmed. Disconnect it before an explicit new connection. Any active recording is finalized by Disconnect.'
+        if self.requires_reconnect and key=='finish': help_text='Communication failed; finish the active recording. Reconnect explicitly before further acquisition.'
+        if pending: help_text='Awaiting worker confirmation: '+', '.join(self.pending_actions)+'. '+help_text
+        self.capture_next.setText(label); self.capture_next_help.setText(help_text)
+        self.capture_next.setEnabled(key!='done' and not pending and {'connect':self.connect_button,'record':self.record_button,
+            'discover':self.discovery_start,'configure':self.capture_preset,'capture':self.capture_start,'finish':self.capture_finish,'export':self.capture_bundle,
+            'reconnect':self.disconnect_button if self.adapter_open or self.connected else self.connect_button}.get(key,self.capture_next).isEnabled())
+        self.capture_next.setToolTip(help_text)
+
+    def perform_next_capture_action(self):
+        action=getattr(self,'next_capture_action',None)
+        buttons={'connect':self.connect_button,'record':self.record_button,'discover':self.discovery_start,
+                 'configure':self.capture_preset,'capture':self.capture_start,'finish':self.capture_finish,'export':self.capture_bundle,
+                 'reconnect':self.disconnect_button if self.adapter_open or self.connected else self.connect_button}
+        if action=='connect': self.connection_panel.show()
+        if action in buttons: buttons[action].click()
+
     def update_capture(self):
         if not hasattr(self,'capture_list'): return
-        prepared=self.connected and self.discovery_prepared and self.source_key()==self.discovery_target and not self.requires_reconnect
-        self.capture_preset.setEnabled(prepared and not (self.discovery_active and not self.polling_active))
-        self.capture_start.setEnabled(prepared and self.source_key()==getattr(self,'capture_plan_ecu',None) and (bool(self.capture_selected() or self.raw_selected()) or self.capture_active))
-        self.capture_bundle.setEnabled(not self.recording_id and bool(self.sessions))
-        self.bundle_button.setEnabled(not self.recording_id and bool(self.sessions))
+        prepared,configured,plan=self.capture_plan_status()
+        scanning=self.discovery_active and not self.polling_active
+        self.capture_preset.setEnabled(prepared and not scanning and 'discover' not in self.pending_actions)
+        self.capture_start.setEnabled(configured and not scanning and 'drive_capture' not in self.pending_actions)
+        closed=self.latest_closed_session()
+        self.capture_bundle.setEnabled(not self.recording_id and bool(closed) and 'record_stop' not in self.pending_actions)
+        selected=self.current_session()
+        self.bundle_button.setEnabled(not self.recording_id and bool(selected and selected['ended']) and 'record_stop' not in self.pending_actions)
+        self.capture_finish.setEnabled(bool(self.recording_id or self.capture_active) and not any(a in self.pending_actions for a in ('stop','record_stop')))
+        self.capture_finish.setText('Stop capture (not recording)' if self.capture_active and not self.recording_id else 'Finish session')
+        self.capture_finish.setToolTip('Stops polling and closes the active recording; adapter stays open unless the existing receive-cancel/failure safety requires reconnect' if self.recording_id else
+                                       'Stops monitoring only; no active recording exists' if self.capture_active else 'No active recording or Drive Capture to finish')
+        export_reason='Export a closed session as private diagnostic evidence; review before sharing' if closed else 'Finish a recording to make a closed session available'
+        self.capture_bundle.setToolTip(export_reason)
+        self.bundle_button.setToolTip('Select a closed session and finish any active recording before exporting private evidence')
+        self.capture_identity.setText(self.source_identity()+' · ECU '+str(self.source_key() or 'no response observed'))
+        recording='Active — worker confirmed' if self.recording_id else 'Off — no observations being recorded'
+        if 'record' in self.pending_actions: recording='Off — awaiting worker start confirmation'
+        if 'record_stop' in self.pending_actions: recording='Active — awaiting worker finish confirmation'
+        self.capture_recording_note.setText('Recording: '+recording)
         values=self.warning_history.get(self.source_key(),[])
         counter=('No warning-time counter observations' if not values else 'One counter sample; trend unavailable' if len(values)==1
                  else f'Warning-time counter static across {len(values)} recent samples' if len(set(values))==1
@@ -768,7 +1002,10 @@ class MainWindow(QMainWindow):
         self.capture_counter_note.setText(counter+'. Counter alone cannot establish a current SCR warning or fault. NOx (0183) is an unchecked manual option. RAW-only provides no numeric DPF pressure or SCR state.')
         for widget in (self.journey_start,self.journey_end,self.note_button,self.marker_note):
             widget.setEnabled(bool(self.recording_id) and self.mode!='REPLAY')
-        pids=[0x8B,0x7A,0x7C,0x0C,0x0D,0x05,0x85] if self.capture_focus.isChecked() else (list(dict.fromkeys(self.capture_selected()+self.raw_selected())) or list(DRIVE_WEIGHTS))
+        pids=[0x8B,0x7A,0x7C,0x0C,0x0D,0x05,0x85] if self.capture_focus.isChecked() else (list(dict.fromkeys(self.capture_selected()+self.raw_selected())) or list(dict.fromkeys([12,13,5,16]+list(DRIVE_WEIGHTS))))
+        if not self.capture_focus.isChecked() and not self.capture_technical.isChecked():
+            order=[12,13,5,0x8B,0x7A,0x85,0x83,0x88,0x7C,0x78,0x10]
+            pids=[p for p in order if p in pids]+[p for p in pids if p not in order]
         self.capture_table.setRowCount(len(pids))
         for row,pid in enumerate(pids):
             sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
@@ -776,33 +1013,35 @@ class MainWindow(QMainWindow):
             suffix={0x8B:'_regeneration',0x7A:'_delta_pressure',0x7C:'_bank_1_inlet',0x78:'_bank_1_sensor_1',0x85:'_tank_level'}.get(pid)
             field=next((f for f in sample.get('fields',[]) if not suffix or f.get('sensor_id','').endswith(suffix)),{})
             value,unit='—',field.get('unit','')
-            state=support_state(self.support.get(self.source_key(),set()),self.support_pages.get(self.source_key(),set()),pid).upper()
+            state=self.unavailable_reason(pid)
             times=self.capture_history.get((self.source_key(),pid),[])
             gaps=[b-a for a,b in zip(times,list(times)[1:]) if b>a]
             interval=f'{sum(gaps)/len(gaps):.2f} s' if gaps else 'No interval yet'
-            age=time.monotonic()-sample.get('monotonic_ns',0)/1e9 if sample.get('monotonic_ns') else None
-            expected=nominal_interval(pid,self.capture_weights,self.rate.value()) if pid in self.capture_weights else 0
-            current=self.capture_active and self.polling_active and self.connected and self.source_key()==self.capture_ecu and pid in self.capture_weights and age is not None and age<=max(5,expected*2.5) and not sample.get('error') and not sample.get('replay')
-            if field.get('state')=='AVAILABLE' and field.get('value') is not None:
+            presentation=self.sample_presentation(pid,sample); age=presentation['age']; current=presentation['current']
+            if field.get('state')=='AVAILABLE' and field.get('value') is not None and support_state(self.support.get(self.source_key(),set()),self.support_pages.get(self.source_key(),set()),pid)=='supported':
                 value=field.get('display',field['value'])
                 if isinstance(value,(int,float)): value=f'{value:.2f}'
-                state='Current sample' if current else 'REPLAY / recorded' if sample.get('replay') else 'Stale / last sample'
-                state+=' · '+sample.get('source_kind','UNKNOWN')
-            elif state=='SUPPORTED': state='No valid supported field / unavailable'
-            if sample.get('error'): state+=' · invalid: '+sample['error']
-            if sample.get('raw_only'):
+                state=presentation['text']
+            if presentation['raw']:
                 value,unit='—',''
-                layout='STANDARD_DOCUMENTED' if sample.get('layout_status')=='STANDARD_DOCUMENTED' else 'DECODER UNVERIFIED'
-                state=('Current raw sample' if current else 'REPLAY / recorded raw' if sample.get('replay') else 'Stale raw sample')+' · RAW ONLY / '+layout+' · '+sample.get('source_kind','UNKNOWN')
+                layout='Numeric interpretation disabled' if sample.get('layout_status')=='STANDARD_DOCUMENTED' else 'No verified numeric decoder'
+                state=('Current raw sample' if current else 'REPLAY / recorded raw' if sample.get('replay') else 'Stale raw sample')+' · RAW ONLY · '+layout+' · '+presentation['acquisition']+' · '+presentation['origin']
             gap=f'age {max(0,age):.2f} s' if age is not None else '—'
             if gaps: gap+=f' / max {max(gaps):.2f} s'
-            update_row(self.capture_table,row,[field.get('name',sensor.name),value,unit,state,interval,gap,self.capture_weights.get(pid,'—')])
-        monitor_errors=max(0,self.error_count-getattr(self,'capture_error_baseline',self.error_count))
-        self.capture_summary.setText(f'Capture: {"ACTIVE" if self.capture_active and self.polling_active else "not active"} · ECU {self.source_key() or "—"} · {len(self.capture_weights) if self.capture_active else len(self.capture_selected())+len(self.raw_selected())} PIDs · Polling {"active" if self.polling_active else "stopped"} · Recording {"active" if self.recording_id else "off"} · Monitoring errors {monitor_errors} · Total errors {self.error_count}')
-        self.capture_preset.setToolTip('Complete Discovery for this ECU before preparing choices; no commands are sent by this button')
-        self.capture_start.setToolTip('Prepare eligible choices for this ECU, then explicitly start acquisition')
-        stage = 4 if self.capture_active else 3 if self.discovery_prepared else 2 if self.connected and self.recording_id else 1 if self.connected else 0
-        self.capture_stepper.show_stage(stage)
+            name=HUMAN_NAMES.get(pid,field.get('name',sensor.name))
+            update_row(self.capture_table,row,[name,value,unit,state,interval,gap,self.capture_weights.get(pid,'—')])
+            self.capture_table.item(row,0).setData(Qt.ItemDataRole.UserRole,pid)
+            self.capture_table.item(row,0).setToolTip(f'{sensor.name} · PID 01{pid:02X} · current ECU/scenario evidence only')
+            self.capture_table.item(row,3).setToolTip(presentation['detail']+'\n'+state+'\n'+str(sample.get('layout_status','')))
+        monitor_errors=self.capture_monitor_errors
+        details=f'Capture: {"ACTIVE" if self.capture_active and self.polling_active else "not active"} · ECU {self.source_key() or "—"} · {len(self.capture_weights) if self.capture_active else len(self.capture_selected())+len(self.raw_selected())} PIDs · Polling {"active" if self.polling_active else "stopped"} · Recording {"active" if self.recording_id else "off"} · Monitoring errors {monitor_errors} · Total transaction errors {self.error_count} (includes intentional cancellations)'
+        simple=f'Drive Capture {"running" if self.capture_active and self.polling_active else "not running"} · {len(plan["weights"])} configured PIDs · '+('Discovery complete for this ECU' if prepared else 'Discovery needed for this ECU')
+        if monitor_errors: simple+=f' · {monitor_errors} monitoring errors; inspect technical details'
+        self.capture_summary.setText(details if self.capture_technical.isChecked() else simple); self.capture_summary.setToolTip(details)
+        self.capture_preset.setToolTip('Prepare choices; no commands sent' if prepared else 'Complete standard Discovery for the selected ECU in this connection; reconnect after failures')
+        self.capture_start.setToolTip('Start acquisition explicitly; '+('recording active' if self.recording_id else 'monitoring only, Recording Off') if configured else
+                                      'Complete current ECU Discovery, prepare a preset and select at least one eligible PID')
+        self.workflow_presentation()
         raw_details=[]
         for pid in sorted(RAW_ONLY_PIDS):
             sample=self.discovery_observations.get((self.source_key(),pid),{})
@@ -823,10 +1062,11 @@ class MainWindow(QMainWindow):
         self.discovery_filter = QComboBox(); self.discovery_filter.addItems(['All systems','Engine','DPF','Exhaust','SCR/AdBlue','NOx'])
         self.discovery_filter.currentTextChanged.connect(self.update_discovery)
         source_row.addWidget(self.discovery_filter); layout.addLayout(source_row)
-        row = QHBoxLayout()
+        row = FlowLayout()
         self.discovery_start = self.button('Scan standard PIDs for selected ECU', lambda: self.send('discover', ecu=self.source_key()))
         self.discovery_monitor = self.button('Monitor available standard PIDs', lambda: self.send('monitor_discovery', ecu=self.source_key()))
-        for w in (self.discovery_start,self.discovery_monitor,self.button('Stop',lambda:self.send('stop')),
+        self.discovery_stop=self.button('Stop polling / discovery',lambda:self.send('stop'),'stop')
+        for w in (self.discovery_start,self.discovery_monitor,self.discovery_stop,
                   self.button('Export discovery report…',self.export_discovery)): row.addWidget(w)
         layout.addLayout(row)
         self.discovery_status = QLabel(); self.discovery_status.setWordWrap(True); layout.addWidget(self.discovery_status)
@@ -851,10 +1091,16 @@ class MainWindow(QMainWindow):
         self.discovery_table.setRowCount(len(self.discovery_rows))
         for row,e in enumerate(self.discovery_rows):
             sample = e.get('sample',{})
-            update_row(self.discovery_table,row,[e['system'],e['name']+' / '+e['request'],e.get('ecu','Offline candidate'),
+            pid=int(e['pid'],16) if e.get('pid') else None
+            update_row(self.discovery_table,row,[e['system'],HUMAN_NAMES.get(pid,e['name'])+' / '+e['request'],e.get('ecu','Offline candidate'),
                        e['support'],e.get('availability','RESEARCH_ONLY'),
                        ('REPLAY · ' if sample.get('replay') else 'SAMPLE · ' if sample else '')+(e.get('evidence','NO_SAMPLE') if 'sample' in e else 'RESEARCH_ONLY'),
                        e['verification']+' / vehicle UNVERIFIED',sample.get('timestamp','—')])
+            self.discovery_table.item(row,1).setToolTip(e['name']+' · '+e['request']+'\nCurrent ECU/scenario evidence only')
+            if pid is not None:
+                support=e['support']
+                explanation=('Not supported in selected simulation scenario' if self.mode=='SIMULATED' else 'Not supported by this ECU') if support=='UNSUPPORTED' else 'Discovery support not completed / unknown' if support=='UNKNOWN' else self.unavailable_reason(pid)
+                self.discovery_table.item(row,4).setToolTip(explanation+'\n'+e.get('availability','UNKNOWN'))
         counts = {s:sum(e.get('availability')==s for e in self.discovery_data['standard'])
                   for s in ('AVAILABLE','UNSUPPORTED','UNKNOWN','UNVERIFIED','NO_SUPPORTED_FIELDS','INVALID / UNVERIFIED')}
         selected=[e for e in self.discovery_data['standard'] if e.get('ecu')==self.source_key()]
@@ -864,11 +1110,13 @@ class MainWindow(QMainWindow):
         unverified=sum('UNVERIFIED' in e.get('availability','') for e in selected)
         self.discovery_status.setText(f'ECU {self.source_key() or "—"} · {"Discovery running" if self.discovery_active else self.discovery_reason}\nSupported {supported} · Unsupported {unsupported} · Unknown {unknown} · Observed samples {positive} · Unverified layouts {unverified}')
         self.discovery_status.setToolTip(', '.join(f'{s}: {n}' for s,n in counts.items()))
-        allowed = self.connected and self.mode != 'REPLAY' and not self.requires_reconnect and not self.discovery_active
+        can=self.connection_protocol.upper() in {'6','7','8','9','A6','A7','A8','A9'} or '15765' in self.connection_protocol
+        allowed = self.connected and self.source_key() in self.support and self.source_key()!='headerless' and can and self.mode != 'REPLAY' and not self.requires_reconnect and not self.discovery_active and 'discover' not in self.pending_actions
         self.discovery_start.setEnabled(allowed)
         self.discovery_monitor.setEnabled(allowed and self.discovery_prepared and self.source_key()==self.discovery_target)
         self.discovery_start.setToolTip('Connect explicitly; hardware failure requires reconnect' if not allowed else 'Read standard supported PIDs only; selected ECU')
         self.discovery_monitor.setToolTip('Complete discovery for this ECU first; unknown or unsupported PIDs cannot be monitored')
+        self.discovery_stop.setEnabled(self.stop_button.isEnabled()); self.discovery_stop.setToolTip('Stop acquisition; recording and adapter connection remain independent' if self.discovery_stop.isEnabled() else 'Polling and Discovery are already stopped')
         self.discovery_details()
 
     def discovery_details(self):
@@ -895,13 +1143,9 @@ class MainWindow(QMainWindow):
         weights = priority_weights([i.data(Qt.ItemDataRole.UserRole) for i in checked
                                     if i.data(Qt.ItemDataRole.UserRole) in self.support.get(source, set())],
                                    self.priorities if self.use_priorities.isChecked() else {})
-        schedule_weights = dict(weights)
+        schedule_weights = self.schedule_weights()
         if self.capture_active:
             weights={p:w for p,w in self.capture_weights.items() if p in weights}
-            schedule_weights=dict(self.capture_weights)
-        elif self.discovery_active and self.polling_active:
-            schedule_weights.update(priority_weights(DISCOVERY_PIDS & self.support.get(self.discovery_target,set()),
-                                                     {},allow_discovery=True))
         current, states = 0, {}
         for index, item in enumerate(checked):
             pid = item.data(Qt.ItemDataRole.UserRole); sensor = self.registry[pid]
@@ -916,16 +1160,13 @@ class MainWindow(QMainWindow):
             error = self.sensor_errors.get(key, "")
             if error and state != "Not supported": state = "ECU rejected / unavailable" if "7F 01" in error else "Invalid / unavailable"
             if reading:
+                presentation=self.sample_presentation(pid,reading)
                 age = now - reading["received_at"]
-                expected = nominal_interval(pid, schedule_weights, self.rate.value()) if pid in weights else 0
-                threshold = max(5., expected * 2.5)
                 replay = reading["mode"].startswith("REPLAY")
                 evidence = ("REPLAY · " if replay else "") + reading.get("source_kind", "UNKNOWN")
-                valid = (not replay and self.connected and self.polling_active and reading["mode"] == self.mode
-                         and pid in weights and age <= threshold and not reading.get("invalid")
-                         and not reading.get("stale_reason"))
+                valid = presentation['current']
                 state = "Recorded (offline)" if replay else "Valid" if valid else "Stale (last success)"
-                reason = reading.get("stale_reason") or error or (self.acquisition_reason if not replay and not self.polling_active else "")
+                reason = presentation['reason']
                 if reason and not valid: state += " · " + reason
                 current += valid
                 converted, unit = convert(reading["value"], sensor.unit, self.units.isChecked())
@@ -940,11 +1181,13 @@ class MainWindow(QMainWindow):
             states[pid] = state + " / " + evidence
             update_row(self.dashboard, index, [sensor.name, value, unit, state, hz, stamp, source or "—", evidence,
                                               interval, gap, weights.get(pid, "—")])
-            self.dashboard.item(index, 3).setToolTip(error or self.acquisition_reason)
-            color = "#eabf75" if state.startswith("Stale") else "#e89494" if "Invalid" in state or "rejected" in state else "#8cddd0" if state == "Valid" else "#91a0b0"
+            self.dashboard.item(index, 3).setToolTip(self.sample_presentation(pid,reading)['detail'] if reading else self.unavailable_reason(pid))
+            color = COLORS['warning'] if state.startswith("Stale") else COLORS['error'] if "Invalid" in state or "rejected" in state else COLORS['accent'] if state == "Valid" else COLORS['muted']
             self.dashboard.item(index, 3).setForeground(QColor(color))
         self.coverage.setText(f'ECU: {source or "—"} | selected supported: {len(weights)}/{len(checked)} | current: {current}/{len(weights)} | {self.acquisition_reason}')
-        self.banner.setText(self.mode + (" · recorded evidence, offline" if self.mode == "REPLAY" else " · polling" if self.polling_active else " · polling stopped; values stale"))
+        self.banner.setText(self.source_identity()+' · ECU '+str(source or 'no response observed')+
+                            (' · offline replay' if self.mode=='REPLAY' else ' · '+self.acquisition_mode() if self.polling_active or self.discovery_active else ' · polling stopped; values stale')+
+                            (' · Recording active' if self.recording_id else ' · Recording Off'))
         if self.explorer.rowCount() == 0:
             for s in self.registry.values():
                 add_row(self.explorer, [s.name, f"01{s.pid:02X}", f'01 / {s.metadata["positive_response"]}', "—", s.metadata["layout"], s.metadata["formula"], s.unit, "—", s.metadata["verification"], "—", "—", "Unavailable"])
@@ -952,7 +1195,7 @@ class MainWindow(QMainWindow):
         for row, sensor in enumerate(self.registry.values()):
             reading = self.readings.get((source, sensor.pid))
             verification = "UNSUPPORTED" if source in self.support and support_state(self.support[source], self.support_pages.get(source, set()), sensor.pid) == "unsupported" else sensor.metadata["verification"]
-            nominal = f"{nominal_interval(sensor.pid, schedule_weights, self.rate.value()):.2f} s nominal" if sensor.pid in weights else "Not scheduled"
+            nominal = f"{nominal_interval(sensor.pid, schedule_weights, self.rate.value()):.2f} s nominal" if sensor.pid in schedule_weights else "Not scheduled"
             for col, val in [(3, source or "—"), (7, nominal),
                              (8, verification), (9, f'{reading["value"]:.3f}' if reading else "—"), (10, reading["timestamp"] if reading else "—"),
                              (11, states.get(sensor.pid, "Not selected / last evidence only"))]:
@@ -966,11 +1209,17 @@ class MainWindow(QMainWindow):
             if kind == "notice": self.notice(value)
             elif kind == "context":
                 self.context_id, self.mode = value["id"], value["mode"]
+                self.connection_protocol=''
+                self.accept_transactions=True
+                self.pending_actions={a:c for a,c in self.pending_actions.items() if a in {'connect','record'}}
+                self.exported_session_id=None; self.bundle_destination=None
+                if not self.recording_id: self.last_recording_id=None
                 self.readings.clear(); self.history.clear(); self.sensor_errors.clear(); self.signal_values.clear()
                 self.support.clear(); self.support_pages.clear()
                 self.discovery_observations.clear(); self.discovery_active = False
                 self.discovery_prepared = False; self.discovery_target = None
                 self.capture_active=False; self.capture_weights.clear(); self.capture_raw_pids.clear(); self.capture_history.clear(); self.warning_history.clear()
+                self.capture_monitor_errors=0
                 self.capture_list.clear(); self.capture_plan_ecu=None
                 for check in self.capture_raw_checks.values(): check.setChecked(False); check.setEnabled(False)
                 self.marker_table.setRowCount(0)
@@ -985,17 +1234,25 @@ class MainWindow(QMainWindow):
                 self.polling_active = value["polling"] and not self.user_paused
                 self.acquisition_reason = value["reason"]
                 self.requires_reconnect = value["requires_reconnect"]
+                if value['polling']: self.pending_actions.pop('start',None)
+                else: self.pending_actions.pop('stop',None)
                 if not self.polling_active and not self.discovery_active:
                     self.discovery_reason = 'Polling stopped; latest samples are recorded evidence'
             elif kind == 'discovery':
                 if value.get('context_id') != self.context_id: continue
                 self.discovery_active = value['active']; self.discovery_reason = value['reason']
                 self.discovery_prepared = value.get('prepared',False); self.discovery_target = value.get('target')
+                if value['active'] and not self.polling_active and not self.capture_active:
+                    self.capture_plan_ecu=None; self.capture_list.clear()
+                    for check in self.capture_raw_checks.values(): check.setChecked(False); check.setEnabled(False)
+                if value['active'] or value.get('prepared') or 'ended' in value.get('reason','').lower(): self.pending_actions.pop('discover',None)
             elif kind == 'capture':
                 if value.get('context_id')!=self.context_id: continue
-                if value['active'] and not self.capture_active: self.capture_error_baseline=self.error_count
+                if value['active'] and not self.capture_active: self.capture_error_baseline=self.error_count; self.capture_monitor_errors=0
                 self.capture_active=value['active']; self.capture_weights=value['weights']; self.capture_ecu=value['ecu']
                 self.capture_raw_pids=set(value.get('raw_pids',[]))
+                if value['active'] or 'eligible' in value.get('reason','').lower(): self.pending_actions.pop('drive_capture',None)
+                if value['active']: self.capture_sections.setCurrentIndex(0)
                 self.capture_status.setText(value['reason'])
             elif kind == 'marker':
                 if value.get('context_id')!=self.context_id: continue
@@ -1005,6 +1262,14 @@ class MainWindow(QMainWindow):
             elif kind == "connection":
                 self.mode = value["mode"]
                 self.connected = value["ecu"] == "Connected"
+                self.connection_phase=value['ecu']
+                self.connection_protocol=value['protocol']
+                self.adapter_open=value['adapter'] not in {'Disconnected','Offline'} and self.mode!='REPLAY'
+                if self.connected or value['ecu']=='No verified ECU response': self.pending_actions.pop('connect',None)
+                if value['adapter']=='Disconnected':
+                    self.pending_actions.pop('disconnect',None)
+                    for action in ('drive_capture','discover','start','stop'): self.pending_actions.pop(action,None)
+                    if 'connect' in self.pending_actions and self.pending_actions['connect']!=self.context_id: self.pending_actions.pop('connect',None)
                 if self.connected: self.connection_panel.hide()
                 self.status.setText(f'Adapter: {value["adapter"]}   |   ECU: {value["ecu"]}   |   Protocol: {value["protocol"]}')
                 self.connect_button.setEnabled(value["adapter"] == "Disconnected" or value["ecu"] in {"Connected", "No verified ECU response", "Replay paused"})
@@ -1014,13 +1279,20 @@ class MainWindow(QMainWindow):
                     if self.ecu.findData(source) < 0: self.ecu.addItem(source, source)
             elif kind == "support_pages": self.support_pages = value
             elif kind == "recording":
-                if value: self.last_recording_id=value
+                if value:
+                    if value!=self.recording_id: self.exported_session_id=None; self.bundle_destination=None
+                    self.last_recording_id=value
+                    self.pending_actions.pop('record',None)
+                else: self.pending_actions.pop('record_stop',None)
                 self.recording_id = value; self.recording_started = time.monotonic() if value else None
                 self.refresh_sessions()
             elif kind == "transaction":
                 record, readings = value
+                if not self.accept_transactions: continue
                 if self.context_id and record.get("context_id", self.context_id) != self.context_id: continue
                 self.request_count += 1; self.error_count += record["status"] != "OK"
+                if self.capture_active and record['status'] not in {'OK','CANCELLED'} and record.get('pid') and int(record['pid'],16) in self.capture_weights:
+                    self.capture_monitor_errors+=1
                 if len(self.raw_records) == 500: self.raw_table.removeRow(0)
                 self.raw_records.append(record)
                 add_row(self.raw_table, [record["timestamp"], record["command"], record["status"], f'{record["latency_ms"]:.1f}',
@@ -1034,17 +1306,20 @@ class MainWindow(QMainWindow):
                     key = source, reading["pid"]
                     replay = record.get("replay", False)
                     sent_at = reading["monotonic_ns"] / 1e9
-                    self.readings[key] = dict(reading, received_at=time.monotonic() if replay else sent_at, invalid=False)
+                    metadata=dict(context_id=self.context_id,acquisition_mode=self.acquisition_mode(),recording_session=self.recording_id)
+                    self.readings[key] = dict(reading, **metadata, received_at=time.monotonic() if replay else sent_at, invalid=False)
                     self.sensor_errors.pop(key, None)
                     self.history.setdefault(key, deque(maxlen=20)).append(sent_at)
                     self.signal_values.setdefault((source,reading['pid'],reading['mode'],reading.get('source_kind','UNKNOWN')),deque(maxlen=240)).append((sent_at,reading['value']))
                     self.discovery_observations[key] = {'ecu':reading['ecu'],'pid':reading['pid'],
                         'fields':[dict(state='AVAILABLE',name=self.registry[reading['pid']].name,value=reading['value'],unit=self.registry[reading['pid']].unit)],
                         'timestamp':reading['timestamp'],'source_kind':reading.get('source_kind','UNKNOWN'),'replay':replay}
+                    self.discovery_observations[key].update(metadata,mode=reading['mode'])
                     self.discovery_observations[key]['monotonic_ns']=reading['monotonic_ns']
                     self.capture_history.setdefault(key,deque(maxlen=30)).append(sent_at)
                 for sample in record.get('discovery_samples',[]):
-                    self.discovery_observations[sample['ecu'] or 'headerless',sample['pid']] = sample
+                    self.discovery_observations[sample['ecu'] or 'headerless',sample['pid']] = dict(sample,context_id=self.context_id,
+                        acquisition_mode=self.acquisition_mode(),recording_session=self.recording_id,mode=self.mode)
                     if sample['pid']==0x85 and not sample.get('error'):
                         field=next((f for f in sample['fields'] if f.get('sensor_id','').endswith('_warning_time') and f.get('state')=='AVAILABLE'),None)
                         if field: self.warning_history.setdefault(sample['ecu'] or 'headerless',deque(maxlen=30)).append(field['value'])
@@ -1072,6 +1347,8 @@ class MainWindow(QMainWindow):
                         for (ecu, p), reading in self.readings.items():
                             if ecu == source and (p == pid or rejection["nrc"] == "22"):
                                 reading["stale_reason"] = reason
+                        for (ecu,p), sample in self.discovery_observations.items():
+                            if ecu==source and (p==pid or rejection['nrc']=='22'): sample['stale_reason']=reason
                 if record["status"] in {"INVALID", "TRANSPORT_ERROR"} and not record.get('protocol_errors') and record.get("pid"):
                     pid = int(record["pid"], 16)
                     for source in self.support: self.sensor_errors[source, pid] = record["error"]
@@ -1092,13 +1369,20 @@ class MainWindow(QMainWindow):
 
     def refresh_presentation(self):
         self.update_connection_controls()
-        self.session_record_button.setEnabled(not self.recording_id)
-        self.session_finish_button.setEnabled(bool(self.recording_id))
+        record_allowed=not self.recording_id and self.mode!='REPLAY' and not any(a in self.pending_actions for a in ('record','record_stop','disconnect'))
+        finish_allowed=bool(self.recording_id) and 'record_stop' not in self.pending_actions
+        for button in (self.record_button,self.session_record_button,self.capture_record):
+            button.setEnabled(record_allowed); button.setToolTip(self.source_identity()+'\nSynthetic evidence only.' if 'SIMULATION' in self.source_identity() else
+                self.source_identity()+'\nECU '+str(self.source_key() or 'not yet observed')+'. Recording can begin before connection.')
+            if self.mode=='REPLAY': button.setToolTip('Replay is offline evidence; recording replay is disabled')
+        for button in (self.record_stop_button,self.session_finish_button,self.capture_record_stop):
+            button.setEnabled(finish_allowed); button.setToolTip('Close the active journal; polling and connection are independent' if self.recording_id else 'Recording is Off; no active journal to finish')
         self.rejection_reason.setVisible(bool(self.rejection_reason.text()))
-        state = 'Connected' if self.connected else 'Connecting' if self.mode=='Connecting' else 'Disconnected'
-        source = 'REPLAY' if self.mode=='REPLAY' else 'SIMULATED' if self.mode=='SIMULATED' else 'LIVE' if self.mode.startswith('LIVE') else self.source.currentText().split(' / ')[0].upper()
+        state = 'Connected' if self.connected else 'Adapter connected / no ECU response' if self.adapter_open and self.connection_phase=='No verified ECU response' else 'Adapter initializing / no ECU confirmed' if self.adapter_open else 'Connecting' if 'connect' in self.pending_actions else 'Disconnected'
+        source = self.source_identity()
         activity = 'Replay' if self.mode=='REPLAY' else 'Drive Capture' if self.capture_active else 'Discovery' if self.discovery_active else 'Idle'
-        values = {'Source':source,'Connection':state,'ECU':self.source_key() or '—','Polling':'Active' if self.polling_active else 'Stopped','Recording':'Active' if self.recording_id else 'Off','Activity':activity}
+        ecu_state=self.source_key()+' · last response; reconnect required' if self.requires_reconnect and self.source_key() else self.source_key()+' · response observed' if self.connected and self.source_key() else self.source_key()+' · recorded' if self.mode=='REPLAY' and self.source_key() else 'No current ECU confirmed'
+        values = {'Source':source,'Connection':state,'ECU':ecu_state,'Polling':'Active' if self.polling_active else 'Stopped','Recording':'Active' if self.recording_id else 'Off','Activity':activity}
         for name,value in values.items():
             label=self.status_indicators[name]; label.setText(f'{name}: {value}'); label.setAccessibleName(f'{name}: {value}'); label.setToolTip(self.status.text() if name=='Connection' else label.text())
         self.filter_raw(); self.filter_explorer(); self.refresh_cards(); self.refresh_signal_chart()
@@ -1109,7 +1393,8 @@ class MainWindow(QMainWindow):
         if self.focus_dashboard.isChecked():
             for i in range(self.capture_table.rowCount()):
                 cells=[self.capture_table.item(i,c).text() for c in range(self.capture_table.columnCount())]
-                if cells[3].startswith('UNSUPPORTED'): continue
+                pid=self.capture_table.item(i,0).data(Qt.ItemDataRole.UserRole)
+                if support_state(self.support.get(self.source_key(),set()),self.support_pages.get(self.source_key(),set()),pid)=='unsupported': continue
                 rows.append((cells[0],cells[1],cells[2],cells[3],f'ECU {self.source_key() or "—"} · {cells[5]}'))
             # UI-only replacements come from positive, supported basic readings.
             # This never selects, schedules or probes a sensor.
@@ -1141,10 +1426,21 @@ class MainWindow(QMainWindow):
                 else:
                     cells=[self.dashboard.item(i,c).text() for c in range(self.dashboard.columnCount())]
                     state={'Unavailable':'No sample yet','Not supported':'Unsupported PID','Support unknown':'Support not observed','Valid':'Current sample'}.get(cells[3],cells[3])
-                    rows.append((cells[0],cells[1],cells[2],state,f'ECU {cells[6]} · {cells[9]} · {cells[7]}'))
+                    reading=self.readings.get((self.source_key(),pid))
+                    if reading:
+                        presentation=self.sample_presentation(pid,reading)
+                        state=presentation['text']
+                    else: state=self.unavailable_reason(pid)
+                    age=(f'age {max(0,presentation["age"]):.2f} s' if presentation['age'] is not None else 'recorded time') if reading else 'no sample'
+                    recorded=('Recorded' if presentation['recording']=='Recorded in current session' else 'Not recorded') if reading else ''
+                    rows.append((cells[0],cells[1].replace(' (last)',''),cells[2],state,f'ECU {cells[6]} · {age}'+(' · '+recorded if recorded else '')))
         for i,card in enumerate(self.sensor_cards):
             card.setVisible(i<len(rows))
-            if i<len(rows): card.present(*rows[i])
+            if i<len(rows):
+                card.present(*rows[i])
+                pid=next((p for p,s in self.registry.items() if s.name==rows[i][0]),None)
+                reading=self.readings.get((self.source_key(),pid))
+                if reading: card.setToolTip(card.toolTip()+'\n'+self.sample_presentation(pid,reading)['detail'])
 
     def refresh_signal_chart(self, *args):
         if not hasattr(self,'signal_chart'): return

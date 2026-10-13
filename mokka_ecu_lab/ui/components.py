@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, QRect, QSize
 from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea, QLayout
 from PySide6.QtGui import QKeySequence, QShortcut
 from .theme import icon, METRICS
+from .presentation import StepState, STEP_LABELS
 
 
 def caption(text):
@@ -29,7 +30,7 @@ class SensorCard(QFrame):
         row = QHBoxLayout(); self.value = QLabel('—'); self.value.setObjectName('sensorValue')
         self.unit = QLabel(); self.unit.setObjectName('muted'); row.addWidget(self.value); row.addWidget(self.unit); row.addStretch(); layout.addLayout(row)
         self.state = QLabel('No sample yet'); self.state.setObjectName('caption'); self.state.setWordWrap(True); layout.addWidget(self.state)
-        self.evidence = QLabel(); self.evidence.setObjectName('caption'); layout.addWidget(self.evidence)
+        self.evidence = QLabel(); self.evidence.setObjectName('caption'); self.evidence.setWordWrap(True); layout.addWidget(self.evidence)
 
     def present(self, name, value, unit, state, evidence):
         self.name.setText(name); self.value.setText(str(value)); self.unit.setText(unit)
@@ -108,11 +109,27 @@ class CaptureStepper(QWidget):
 
     def __init__(self, navigate, parent=None):
         super().__init__(parent); row = QHBoxLayout(self); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(4)
-        self.buttons = []
+        self.buttons = []; self.states = []; self.selected_stage = None
         for index, label in enumerate(self.LABELS):
-            button = QPushButton(f'{index + 1}  {label}'); button.setObjectName('step'); button.setCheckable(True)
-            button.setAccessibleName(f'Show {label.lower()} step; does not start an action')
-            button.clicked.connect(lambda checked=False, i=index: navigate(i)); row.addWidget(button); self.buttons.append(button)
+            button = QPushButton(); button.setObjectName('step')
+            button.clicked.connect(lambda checked=False, i=index: self.visit(i, navigate)); row.addWidget(button); self.buttons.append(button)
+        self.present([(StepState.NOT_STARTED, 'No confirmed action yet') for _ in self.LABELS])
+
+    def visit(self, index, navigate):
+        self.show_stage(index); navigate(index)
 
     def show_stage(self, index):
-        for i, button in enumerate(self.buttons): button.setChecked(i == index)
+        # Navigation focus is deliberately independent of operational success.
+        self.selected_stage = index
+        self.buttons[index].setFocus()
+
+    def present(self, steps):
+        self.states = [state for state, _ in steps]
+        for i, (state, reason) in enumerate(steps):
+            button = self.buttons[i]
+            button.setText(f'{i + 1}  {self.LABELS[i]}\n{STEP_LABELS[state]}')
+            changed=button.property('workflowState')!=state.value
+            button.setProperty('workflowState', state.value)
+            button.setAccessibleName(f'{self.LABELS[i]}: {STEP_LABELS[state]}. {reason}. Navigation only')
+            button.setToolTip(reason + '\nVisiting this step sends no commands and changes no recording.')
+            if changed: button.style().unpolish(button); button.style().polish(button)
