@@ -39,7 +39,7 @@ def capture_pages():
             results.append(dict(page=name,physical=[width,height],logical=list(logical),scale=args.scale,
                 compact_sidebar=ui.sidebar.compact,vertical_scroll=area.verticalScrollBar().maximum()>0,
                 horizontal_page_overflow=False))
-        ui.connection_panel.show(); ui.source.setCurrentIndex(1); ui.update_connection_controls(); app.processEvents()
+        ui.connection_panel.show(); ui.update_connection_controls(); app.processEvents()
         assert ui.connection_panel.width()<=ui.centralWidget().width()
         ui.grab().save(str(output/f'{width}x{height}-connection.png'))
         ui.connection_panel.hide()

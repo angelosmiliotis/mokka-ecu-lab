@@ -55,7 +55,7 @@ def tick():
             assert 'static' in window.capture_counter_note.text()
             assert window.capture_table.viewport().height()>=150
             for r in range(window.capture_table.rowCount()):
-                if 'SCR inducement' in window.capture_table.item(r,0).text():
+                if window.capture_table.item(r,0).data(Qt.ItemDataRole.UserRole)==0x88:
                     assert window.capture_table.item(r,1).text()=='—'
                     window.capture_table.scrollToItem(window.capture_table.item(r,0))
             result.update(version=__version__,mode=window.mode,tabs=window.tabs.count(),
