@@ -1,0 +1,95 @@
+{
+  "version": "0.2.7",
+  "private_input_used": false,
+  "validation_scope": "Constructed fixtures and existing simulator only; private regression outputs excluded",
+  "tests": {
+    "passed": 411,
+    "failed": 0,
+    "seconds": 154.49,
+    "added_since_v026": 29,
+    "process_exit": 0
+  },
+  "native": {
+    "source": "SIMULATED",
+    "hardware_connected": false,
+    "major_page_scaling_checks": 84,
+    "phase_scaling_checks": 24,
+    "physical_sizes": [
+      [
+        1280,
+        720
+      ],
+      [
+        1366,
+        768
+      ],
+      [
+        1536,
+        864
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "controlled_qt_pixel_ratios": [
+      1,
+      1.25,
+      1.5
+    ],
+    "screenshots_visually_inspected": true,
+    "horizontal_page_overflow": false,
+    "all_eligible_simulator_pids": 21,
+    "known_allowlisted_scope": 22,
+    "omitted_simulator_pid": "017B: no available fields",
+    "raw_017a_frames_each_run": [
+      3,
+      3,
+      3
+    ],
+    "minimum_samples_every_scheduled_pid": 3,
+    "maximum_observed_gap_seconds": 5.579,
+    "maximum_gui_heartbeat_gap_seconds": 0.48400000000037835,
+    "one_preset_consent": true,
+    "worker_confirmed_schedule": true,
+    "recording_before_connection": true,
+    "numeric_raw_unavailable": true,
+    "monitoring_errors": 0,
+    "closed_recording": true,
+    "finish_between_replies_keeps_adapter": true,
+    "original_journal_unchanged": true,
+    "bundle_members": 13,
+    "bundle_checksums_verified": true,
+    "wire_cap_verified": true,
+    "offline_phase_no_transport": true,
+    "phase_user_reported_only": true
+  },
+  "packaged": {
+    "actual_process_exits": [
+      0,
+      0,
+      0
+    ],
+    "startup_transactions": 11,
+    "startup_errors": 0,
+    "full_auto_scheduled_pids": 21,
+    "stored_017a_raw_frames": 2,
+    "monitoring_errors": 0,
+    "closed_sessions": 3,
+    "compiled_source_modules_match": 33,
+    "offline_json_html_exact_source_match": true,
+    "phase_json_html_exact_source_match": true,
+    "internal_directory_preserved": true
+  },
+  "invariants": {
+    "read_only_allowlists_unchanged": true,
+    "strict_parser_unchanged": true,
+    "transport_limiter_unchanged": true,
+    "weighted_scheduler_unchanged": true,
+    "numeric_decoders_unchanged": true,
+    "aggregate_max_requests_per_second": 4,
+    "manufacturer_live_queries": false,
+    "cloud_telemetry": false,
+    "real_hardware_verified": false
+  }
+}
