@@ -1,4 +1,8 @@
-# v0.2.4 Drive Capture and offline report operator guide
+# Drive Capture and offline report operator guide
+
+## v0.2.7 Full Auto recommended workflow
+
+Use [Full Auto Research Drive](docs/FULL_AUTO.md) while parked: select LIVE/outgoing port/baud, choose Comprehensive or DPF Priority, give one preset RAW consent and press Start Full Auto Research Drive. Recording, connection, safe standard Discovery and all eligible sensor selection follow worker acknowledgments. Before departure require 017A RAW scheduled and at least two stored six-byte positives when eligible; PARTIAL explains missing evidence without blocking other valid measurements indefinitely. Finish and export after parking. No individual RAW/NOx checkboxes are required in this automatic workflow. Manual operation below remains available. The prior v0.2.4 road-test statement applies to offline report fixes, not physical validation of the new preset.
 
 ## Offline evidence/report workflow
 

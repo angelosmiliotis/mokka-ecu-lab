@@ -1,5 +1,25 @@
 # Testing and vehicle validation
 
+## Version 0.2.7 software and packaged validation
+
+**411 tests passed** in the final complete run (154.49 s). All new public fixtures are constructed in tests or use the existing simulator. Checks cover single preset consent, recording before connection, actual worker acknowledgments, ordered current per-ECU bitmaps, conflicting/duplicate/malformed evidence, no unknown/unsupported probes, all eligible known PIDs, numeric-versus-RAW representation, bounded preflight and healthy explicit Retry, source/replay isolation, repeated stored six-byte 017A proof, fair priority ratios, minimum sampling and measured aggregate send-start spacing of at least 250 ms. Bluetooth failure and repeated ECU rejection never reconnect automatically. Long-run receipt history and previews remain bounded.
+
+Native Windows Qt inspection passed **84 main-page geometry checks** plus **24 offline-phase geometry checks**, across 1280×720, 1366×768, 1536×864 and 1920×1080 with controlled Qt pixel ratios 1, 1.25 and 1.5. Actual screenshots were visually reviewed, including acknowledged READY, automatic coverage, FINISHED, phase statistics and UTC labels. Page horizontal overflow was absent; vertical scrolling and independently scrolling tables are expected at small sizes/high DPI. No OS display setting was changed. The three final Full Auto runs each scheduled 21 eligible simulator PIDs, stored at least three positives for every PID and three six-byte 017A RAW samples, with zero monitoring errors and unchanged original journals. The synthetic 017B definition advertises no available fields and is explicitly omitted. Observed comprehensive maximum gaps were approximately 5.5–5.6 seconds at the unchanged 4 aggregate req/s cap; no individual high refresh rate is promised. Maximum GUI heartbeat gap across these final runs was 0.484 s. Checksummed bundles contain 13 members including the acquisition receipt. Phase loading/comparison submits no transport requests.
+
+Private annotation, uncertainty exclusion, exact source grouping, MAP 255-kPa censoring, asynchronous context ages, insufficient overlap, non-causal language, escaped fresh atomic HTML/JSON, phase-label redaction and immutable inputs are covered. The final packaged Windows build matches all **33 source modules**. Two actual startup smoke processes and one complete Full Auto capture/export process exited **0, 0, 0**, after a Qt widget/application lifetime fix. Each startup recorded 11 transactions with zero errors; packaged Full Auto scheduled 21 simulator PIDs, stored two six-byte 017A RAW positives and finalized its recording with zero monitoring errors. Source and executable produce byte-identical offline analysis and phase comparison JSON/HTML for constructed input. Independent private regression of both supplied LIVE bundles also ran outside Git and preserved original ZIPs; neither data nor derived results are distributed.
+
+Protocol/allowlists, ISO-TP parser, transport, smooth weighted scheduler, sensor definitions, numeric layouts and manual capture planner are unchanged from v0.2.6. Worker workflow orchestration and private evidence metadata changed as documented. The Windows ZIP includes `_internal`; SHA-256 and archive contents are checked before publication. See [Full Auto operation](docs/FULL_AUTO.md), [synthetic screenshots](docs/screenshots/v0.2.7) and [portable validation summary](samples/v0.2.7-validation.json). Physical v0.2.7 ECU/adapter/drive validation remains pending.
+
+Reproduce the native checks with a fresh ignored output directory and an explicitly synthetic bundle:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_full_auto.py --output-dir release\full-auto-check --scale 1
+.\.venv\Scripts\python.exe scripts\verify_design.py --bundle release\full-auto-check\synthetic-research-bundle.zip --output-dir release\design-check --full-auto --scale 1
+.\.venv\Scripts\python.exe scripts\verify_packaged.py --exe release\YOUR_BUILD\MokkaECULab\MokkaECULab.exe --output-dir release\packaged-check
+```
+
+For controlled DPI checks, set `QT_QPA_PLATFORM=windows` and a `QT_SCALE_FACTOR` that yields the specified Qt device pixel ratio on the host. The scripts assert that ratio instead of assuming it from the environment value. They never use a COM port. `verify_packaged.py` requires fresh output and checks the actual process exit, rather than accepting a saved success JSON after a shutdown crash.
+
 ## Version 0.2.4 software validation
 
 **345 tests passed** in the complete regression run on 13 October 2026 (105.69 s). New minimal constructed bundles cover separate recorded/raw support, agreeing/conflicting snapshots, ordered and cross-ECU bitmap propagation, missing predecessor evidence, wrong lengths, malformed/negative replies, zero-sample NOT_OBSERVED states, legacy eleven-file inputs and additive old-analysis compatibility. SCR checks separate inactive-at-recorded-time from latched history, reject absent/invalid latest state, preserve all five counters and avoid diagnosis/consumption claims for quantized tank levels, static warning time or one NOx sample.

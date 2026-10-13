@@ -1,5 +1,15 @@
 # Changes
 
+## 0.2.7 — Full Auto research drive and private phase comparison
+
+- One explicit parked preset consent records before a new connection, awaits the actual ECU, performs bounded existing standard Discovery and automatically selects every eligible known standard PID. Comprehensive and DPF Priority preserve the existing serialized transport, allowlist, strict framing and 4 aggregate req/s ceiling.
+- Eligible unverified 017A/0188 replies use RAW-only; documented 0188 uses one numeric representation with its original bytes retained. Six-byte 017A never produces numeric pressure. Current affirmative ordered bitmap evidence and strict positive samples gate eligibility; unsupported, unknown, conflicting or malformed evidence is omitted/aborted without arbitrary probing.
+- DPF preflight requires the acknowledged worker schedule plus two genuinely stored six-byte RAW positives, excluding Discovery and replay. Bounded waiting becomes PARTIAL, allows other eligible monitoring and never reconnects automatically. Explicit healthy-connection Retry inherits preset consent. Failed latest DPF queries downgrade readiness.
+- Private acquisition receipts separate requested/proposed/acknowledged plans, original bitmap evidence, RAW consent, stages, omissions, actual counts/intervals/gaps and categorized errors. Bounded GUI previews and periodic metadata checkpoints preserve complete original journals. Closure receipts are published only after recording/database completion. Bundles include a checksum-covered acquisition receipt when available; legacy inputs remain supported.
+- USER_REPORTED Normal/Sport/road phase markers retain uncertainty and private provenance. Default exports redact labels/notes; phase-label inclusion is explicit. Offline timestamp edits use fresh sidecars. Background comparison, real UTC measured-point plots, MAP encoding saturation, descriptive distributions and bounded asynchronous matched RPM/load/speed bins suppress causal/turbo-lag claims and insufficient overlap. Private HTML/JSON never loads network resources.
+- Preserve manual capture, replay, offline evidence and the v0.2.6 theme. Automatic worker configuration completes its workflow step. New tests and native Windows visual/executable validation use synthetic data only; real local evidence and derived reports remain outside GitHub.
+- Destroy GUI widgets while QApplication is still alive on exit, preventing intermittent packaged Qt shutdown crashes. Packaged validation checks actual process exit for repeated startup and complete Full Auto capture/export, including closed recordings.
+
 ## 0.2.6 — Workflow clarity and state accuracy
 
 - Separate completed, recommended, available, blocked, future and acknowledged-active workflow steps. Step navigation never records or acquires. A contextual next action invokes one existing explicit operation; recording before connection remains available.
