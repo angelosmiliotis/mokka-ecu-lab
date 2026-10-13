@@ -18,7 +18,7 @@ class Replay:
                 if not isinstance(record.get("monotonic_ns"), int): raise ValueError("Invalid time")
                 if record['record_type']=='transaction': base64.b64decode(record["raw_b64"], validate=True)
                 else:
-                    if record.get('event') not in {'Journey Start','Journey End','Note'}: raise ValueError('Invalid marker')
+                    if record.get('event') not in {'Journey Start','Journey End','Note','Phase'}: raise ValueError('Invalid marker')
                     if not isinstance(record.get('timestamp'),str) or not isinstance(record.get('note',''),str):
                         raise ValueError('Invalid marker timestamp/note')
                 return record
