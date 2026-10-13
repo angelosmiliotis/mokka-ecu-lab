@@ -57,12 +57,19 @@ class Recorder:
         self.db.execute("UPDATE sessions SET requests=?,errors=? WHERE id=?", (self.count, self.errors, self.id))
         self.db.commit()
 
-    def close(self):
+    def close(self, evidence=None):
         if not self.file.closed:
             self.file.close()
-            self.db.execute("UPDATE sessions SET ended=? WHERE id=?", (utc_now(), self.id))
+            ended=utc_now()
+            if evidence is not None:
+                evidence['acquisition_receipt']['closed_at']=ended
+                metadata=json.loads(self.db.execute('SELECT metadata FROM sessions WHERE id=?',(self.id,)).fetchone()[0])
+                metadata['capture_evidence']=evidence
+                self.db.execute('UPDATE sessions SET metadata=? WHERE id=?',(json.dumps(metadata),self.id))
+            self.db.execute("UPDATE sessions SET ended=? WHERE id=?", (ended, self.id))
             self.db.commit()
             self.db.close()
+            return ended
 
     def evidence(self, data):
         """Local session metadata; no request and no change to original journal."""
@@ -71,11 +78,16 @@ class Recorder:
         self.db.execute('UPDATE sessions SET metadata=? WHERE id=?',(json.dumps(metadata),self.id))
         self.db.commit()
 
-    def marker(self, event, note='', mode='Unknown', timestamp=None, monotonic_ns=None):
-        if event not in {'Journey Start','Journey End','Note'}: raise ValueError('Unknown marker')
+    def marker(self, event, note='', mode='Unknown', timestamp=None, monotonic_ns=None, phase=None, uncertainty_seconds=0, ecu=None):
+        if event not in {'Journey Start','Journey End','Note','Phase'}: raise ValueError('Unknown marker')
         record=dict(schema_version=2,record_type='marker',id=uuid.uuid4().hex,session_id=self.id,
                     timestamp=timestamp or utc_now(),monotonic_ns=monotonic_ns or time.monotonic_ns(),event=event,
-                    note=str(note)[:512] if event=='Note' else '',mode=mode)
+                    note=str(note)[:512] if event in {'Note','Phase'} else '',mode=mode)
+        if event=='Phase':
+            from mokka_ecu_lab.analysis.phases import annotation
+            record.update(annotation(phase,record['timestamp'],uncertainty_seconds,ecu=ecu,mode=mode,
+                source_kind='SIMULATED' if mode=='SIMULATED' else 'ECU_READING' if mode.startswith('LIVE') else 'UNKNOWN',
+                origin='STATIONARY_OR_PASSENGER_MARKER',note=note))
         self.file.write(json.dumps(record,ensure_ascii=False)+'\n')
         self.file.flush(); os.fsync(self.file.fileno())
         return record
@@ -101,7 +113,7 @@ def export_csv(root: Path, session_id: str, target: Path):
         writer.writerows(cursor)
     db.close()
 
-def export_jsonl(source: Path, target: Path, diagnostic_support=False):
+def export_jsonl(source: Path, target: Path, diagnostic_support=False, include_private_phases=False):
     if source.resolve() == target.resolve():
         raise ValueError("Export target must differ from source recording")
     with source.open(encoding="utf-8") as src, target.open("w", encoding="utf-8", newline="\n") as out:
@@ -111,8 +123,11 @@ def export_jsonl(source: Path, target: Path, diagnostic_support=False):
                 if not line.endswith('\n'): continue
                 raise ValueError("Malformed complete journal line; export stopped") from exc
             if not diagnostic_support:
-                if record.get('record_type')=='marker' and record.get('event')=='Note':
+                if record.get('record_type')=='marker' and record.get('event') in {'Note','Phase'}:
                     record['note']='REDACTED_USER_NOTE'; record['note_redacted']=True
+                    if record.get('event')=='Phase' and not include_private_phases:
+                        record['phase']='REDACTED_USER_PHASE'; record['phase_redacted']=True
+                        record.pop('edited_at',None); record.pop('previous_timestamp',None)
                 for key in ('VIN','vin','vehicle_identification_number','owner','personal_identifiers','metadata'):
                     record.pop(key,None)
                 record["adapter"] = "REDACTED"

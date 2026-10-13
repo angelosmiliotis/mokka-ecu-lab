@@ -18,7 +18,7 @@ from mokka_ecu_lab.sensors import load_registry
 from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, layout_evidence
 
 
-def export_research_bundle(root: Path, session_id: str, target: Path):
+def export_research_bundle(root: Path, session_id: str, target: Path, *, include_private_phases=False):
     root, target = Path(root), Path(target)
     session = next((s for s in list_sessions(root) if s['id']==session_id),None)
     if not session: raise ValueError('Unknown session')
@@ -31,7 +31,7 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
     components, warnings = {}, []
     with tempfile.TemporaryDirectory(prefix='mokka-bundle-') as work:
         folder=Path(work)
-        raw_path=folder/'raw-redacted.jsonl'; export_jsonl(source,raw_path)
+        raw_path=folder/'raw-redacted.jsonl'; export_jsonl(source,raw_path,include_private_phases=include_private_phases)
         export_csv(root,session_id,folder/'measurements.csv')
         support, pages = {}, {}
         errors, versions, decoder_versions, identifiers, markers = [], set(), set(), set(), []
@@ -41,7 +41,8 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
         for line in raw_path.open(encoding='utf-8'):
             record=json.loads(line)
             if record.get('record_type')=='marker':
-                markers.append({k:record.get(k) for k in ('id','timestamp','monotonic_ns','event','note','note_redacted','mode')})
+                markers.append({k:record.get(k) for k in ('id','timestamp','monotonic_ns','event','note','note_redacted','mode',
+                    'phase','phase_redacted','provenance','precision','uncertainty_seconds','ecu_confirmed','ecu','source_kind')})
                 continue
             if record.get('record_type') != 'transaction': continue
             transaction_count+=1; sent_requests+=bool(record.get('sent',True))
@@ -129,6 +130,7 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
                      export_application_version=__version__,export_decoder_version=DECODER_VERSION,
                      capture_weights=evidence.get('capture_weights',{}),vehicle_verified=False,
                      capture_raw_pids=evidence.get('capture_raw_pids',[]),
+                     acquisition_receipt=evidence.get('acquisition_receipt'),
                      raw_only_samples=sum(r['raw_only'] for r in raw_observations),
                      redaction='Default application export; adapter/port/identity bytes and personal metadata excluded')
         for name,data in [('discovery-report.json',report),('session-summary.json',summary),
@@ -136,6 +138,8 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
                           ('polling-statistics.json',intervals),('errors.json',errors),('markers.json',markers),
                           ('raw-observations.json',raw_observations)]:
             (folder/name).write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+        if evidence.get('acquisition_receipt'):
+            (folder/'acquisition-receipt.json').write_text(json.dumps(evidence['acquisition_receipt'],ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
         if not summary['application_versions']: warnings.append('Recording application version unavailable (legacy journal)')
         if not summary['decoder_versions']: warnings.append('Recording decoder version unavailable (legacy journal)')
         if not seen_decoded: warnings.append('No decoded measurements recorded; CSV contains its schema only')
@@ -146,6 +150,7 @@ def export_research_bundle(root: Path, session_id: str, target: Path):
                                       sha256=hashlib.sha256(path.read_bytes()).hexdigest())
         manifest=dict(schema_version=1,created_at=utc_now(),session_id=session_id,components=components,
                       unavailable=warnings,local_original_unchanged=True,redacted=True,cloud_upload=False,
+                      private_phase_annotations_included=include_private_phases,
                       checksum_scope='All content files plus manifest are covered by SHA256SUMS.txt; checksum file cannot hash itself')
         (folder/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
         lines=[hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name for p in sorted(folder.iterdir())]
