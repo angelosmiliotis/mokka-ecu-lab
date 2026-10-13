@@ -41,7 +41,8 @@ def test_compatibility_displays_separate_snapshot_raw_and_unobserved(window,tmp_
     v.matrix.selectRow(index)
     assert 'OEM equivalent' in v.matrix_detail.toPlainText()
     index=next(i for i in range(v.matrix.rowCount()) if v.matrix.item(i,0).text()=='0160')
-    assert v.matrix.item(index,7).text()=='BITMAP_VALID_UNANCHORED' and v.matrix.item(index,8).text()=='0'
+    assert v.matrix.item(index,7).text()=='Bitmap · chain unavailable'
+    assert v.matrix.item(index,7).toolTip()=='BITMAP_VALID_UNANCHORED' and v.matrix.item(index,8).text()=='0'
 
 
 def test_scr_view_and_private_export_do_not_use_worker(window,tmp_path,monkeypatch):
