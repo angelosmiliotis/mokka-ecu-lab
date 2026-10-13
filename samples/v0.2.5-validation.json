@@ -1,0 +1,67 @@
+{
+  "version": "0.2.5",
+  "private_input_used": false,
+  "tests": {
+    "passed": 364,
+    "failed": 0,
+    "process_exit": 0,
+    "seconds": 118.33
+  },
+  "native": {
+    "source": "SIMULATED",
+    "major_page_scaling_checks": 84,
+    "physical_sizes": [
+      [
+        1280,
+        720
+      ],
+      [
+        1366,
+        768
+      ],
+      [
+        1536,
+        864
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "device_pixel_ratios": [
+      1,
+      1.25,
+      1.5
+    ],
+    "raw_capture_requests": [
+      "017A",
+      "0188"
+    ],
+    "nox_recorded": true,
+    "raw_numeric_output": false,
+    "monitoring_errors": 0,
+    "bundle_members": 12,
+    "bundle_checksums_verified": true,
+    "original_journal_unchanged": true
+  },
+  "packaged": {
+    "gui_exit": 0,
+    "offline_analyzer_exit": 0,
+    "requests": 11,
+    "errors": 0,
+    "closed_sessions": 1,
+    "compiled_source_modules_match": 29,
+    "json_exact_source_match": true,
+    "html_exact_source_match": true,
+    "internal_directory_preserved": true
+  },
+  "invariants": {
+    "live_protocol_unchanged": true,
+    "read_only_allowlists_unchanged": true,
+    "aggregate_max_requests_per_second": 4,
+    "serialized_worker_unchanged": true,
+    "manufacturer_live_queries": false,
+    "numeric_decoders_unchanged": true,
+    "cloud_telemetry": false
+  }
+}
