@@ -1,5 +1,16 @@
 # Changes
 
+## 0.2.5 — Desktop workflow and design system
+
+- Native PySide6 shell with grouped, keyboard-accessible sidebar, compact navigation at narrow widths, original Qt line icons, shared dark theme and separate source/connection/ECU/polling/recording/activity indicators.
+- Mode-specific connection settings, clear connecting/disabled states, explicit polling and recording actions. The panel collapses after connection; settings remain available. No automatic connection or navigation-triggered acquisition.
+- Dashboard sensor cards retain unavailable, stale, replay and source evidence; focused view has at most seven indications and only recorded supported replacements. Acquired-point charts keep ECU/mode/source boundaries and never interpolate or request data.
+- Drive Capture gets a seven-step preparation guide, separate monitor/configuration/marker workspaces, explicit RAW-only/NOx choices, observed intervals and monitoring versus total errors. Scans, presets and recording retain their previous semantics.
+- Searchable Sensor Explorer and Raw Data with original-response copy, monospaced bytes and local error inspection. Sessions show completion/source/ECU/transaction counts and explain private export formats.
+- Research gets source/integrity overview, searchable/filterable/sortable compatibility with stable evidence selection, optional technical columns and structured current/history/counter/AdBlue/NOx sections. All original metadata remains available.
+- Scrollable pages and wrapping controls for laptop sizes/scaling. Existing partial Greek labels retained. No continuous animations, cloud/telemetry, new requests or numeric decoder changes.
+
+
 ## 0.2.4 — Evidence fidelity and private offline reports
 
 - Separate recorded Discovery support, reconstructed raw bitmap support, complete positive sample counts and per-PID observation provenance. Keep legacy `support` raw-only. Preserve and explain snapshot/raw contradictions without promotion.

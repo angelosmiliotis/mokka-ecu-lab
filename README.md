@@ -1,6 +1,6 @@
 # Mokka ECU Lab
 
-Version 0.2.4 separates recorded Discovery snapshots, original raw bitmap support and actual positive PID observations. Valid unanchored bitmap pages are provenance gaps, not decoder length errors; zero-sample PIDs show NOT OBSERVED. Research adds recorded-time SCR/AdBlue summaries, private JSON plus self-contained HTML export, saved-analysis compatibility and an offline next-recording checklist. Six-byte 017A remains numerically unverified. Live protocol, read-only permissions and the aggregate 4 req/s cap are unchanged. See [evidence, reports and schema compatibility](research/v0.2.4-evidence-reports.md) and [the operator guide](DRIVE_CAPTURE.md).
+Version 0.2.5 redesigns the native Windows desktop with a grouped sidebar, explicit connection/recording states, real sensor cards and a guided Drive Capture workflow. Data and Research pages add search, clear evidence inspection and structured SCR summaries. All acquisition and numeric decoder rules, read-only permissions and the aggregate 4 req/s cap are unchanged. See [the desktop guide and actual simulated screenshots](docs/UI_DESIGN.md), [evidence/report compatibility](research/v0.2.4-evidence-reports.md) and [the operator guide](DRIVE_CAPTURE.md).
 
 A locally runnable Windows 11 desktop application for read-only OBD-II acquisition, recording, replay and offline decoder research. Python 3.12+ / PySide6 / pyserial. No account, telemetry or automatic connection. The first delivery includes ten generic Mode 01 sensors. Manufacturer-specific live requests are intentionally absent.
 
@@ -38,10 +38,10 @@ No activation or PowerShell execution-policy changes are required. `launch.ps1` 
 
 ## Offline workflow
 
-1. Leave **Simulation** selected. Choose Normal idle, Warming up or another scenario. Press **Connect**. Allow around four seconds for rate-limited initialization and support discovery.
+1. Leave **Simulation** selected. Choose Normal idle, Warming up or another scenario. Press **Start Simulation**. Allow around four seconds for rate-limited initialization and support discovery.
 2. The banner says **SIMULATED**. Initial idle values are approximately 780 RPM, 54 °C and 30% load; these are synthetic fixtures, never vehicle observations.
-3. Check sensors in the left panel; drag them to reorder. Select an ECU explicitly when multiple responses are present. Alternate display units do not change stored base units.
-4. Press **Start Recording**. You can start recording before Connect to retain initialization and support bitmaps as well. Stop Recording closes the journal and marks the session ended.
+3. Choose sensors under **Dashboard → Sensor selection**; drag them to reorder. Select an ECU explicitly when multiple responses are present. Alternate display units do not change stored base units.
+4. Press **Start Recording**. You can start recording before Connect to retain initialization and support bitmaps as well. **Finish recording** closes the journal and marks the session ended.
 5. In **Sessions**, Refresh, select a session, then Export CSV or Export JSONL. Default JSONL exports redact adapter/port identification; diagnostic support export includes originals.
 6. **Replay selected** or **Open JSONL replay** disconnects the transport. Use Play at 1×, 2×, 5× or 10×, Pause, or Step one transaction. Decoder outputs are recomputed from original bytes. Replay never creates a live connection.
 7. **Raw Data** retains the latest 500 preview rows; select one to see the exact original response in text/hex and transaction metadata. All recorded rows remain on disk regardless of UI preview limits.
