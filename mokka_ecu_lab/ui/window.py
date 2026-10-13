@@ -9,9 +9,9 @@ from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QDoubleSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QListWidget, QListWidgetItem, QSplitter, QTextEdit,
-    QFileDialog, QMessageBox, QCheckBox, QLineEdit, QSpinBox, QGroupBox)
-from PySide6.QtCharts import QChart, QChartView, QLineSeries
-from PySide6.QtGui import QColor
+    QFileDialog, QMessageBox, QCheckBox, QLineEdit, QSpinBox, QGroupBox, QFrame, QGridLayout, QApplication, QSizePolicy)
+from PySide6.QtCharts import QChart, QChartView, QLineSeries, QScatterSeries
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from mokka_ecu_lab.adapter import AcquisitionWorker
 from mokka_ecu_lab.sensors import load_registry, convert
 from mokka_ecu_lab.transport import discover_ports
@@ -29,25 +29,11 @@ from mokka_ecu_lab.layouts import RAW_ONLY_PIDS
 from mokka_ecu_lab.analysis.trends import load_trends
 from .trends import TrendsDialog
 from .research import ResearchView
+from .theme import stylesheet, style_table, style_chart, icon
+from .components import Sidebar, SensorCard, CaptureStepper, FlowLayout, caption, page_heading, scroll_page
+from mokka_ecu_lab import __version__
 
-STYLE = """
-QWidget { background: #121923; color: #e4eaf2; font-family: 'Segoe UI'; font-size: 13px; }
-QMainWindow { background: #121923; }
-QPushButton { background: #273647; border: 1px solid #3b4c60; border-radius: 5px; padding: 7px 13px; }
-QPushButton:hover { background: #354c63; }
-QPushButton:disabled { color: #607080; }
-QPushButton#primary { background: #176b66; border: 1px solid #248b83; }
-QPushButton#stop { background: #67353c; }
-QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox { background: #1c2735; border: 1px solid #34465b; padding: 5px; }
-QTabWidget::pane { border: 1px solid #304157; }
-QTabBar::tab { background: #1c2735; padding: 10px 18px; }
-QTabBar::tab:selected { background: #2a4050; color: #76d8cb; }
-QHeaderView::section { background: #263549; padding: 7px; border: 0px; }
-QTableWidget, QListWidget, QTextEdit { background: #172230; border: 1px solid #304157; }
-QTableWidget::item:selected, QListWidget::item:selected { background: #2e5260; }
-QGroupBox { border: 1px solid #304157; border-radius: 5px; margin-top: 14px; padding-top: 14px; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; color: #91a8bf; }
-"""
+STYLE = stylesheet()
 
 def table(headers):
     widget = QTableWidget(0, len(headers))
@@ -57,12 +43,17 @@ def table(headers):
     widget.verticalHeader().setVisible(False)
     widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
     widget.horizontalHeader().setStretchLastSection(True)
+    style_table(widget)
     return widget
 
 def add_row(widget, values):
     row = widget.rowCount()
     widget.insertRow(row)
-    for col, value in enumerate(values): widget.setItem(row, col, QTableWidgetItem(str(value)))
+    for col, value in enumerate(values):
+        item=QTableWidgetItem(str(value))
+        if widget.objectName()=='rawTransactions' and col in (0,1,5):
+            font=QFont('Consolas'); font.setPixelSize(12); item.setFont(font)
+        widget.setItem(row,col,item)
 
 def update_row(widget, row, values):
     for col, value in enumerate(values):
@@ -106,23 +97,46 @@ class MainWindow(QMainWindow):
         self.mode = "Disconnected"
         self.analysis_rows, self.analysis_report, self.comparison_summary = [], {}, []
         self.settings = QSettings("MokkaECULab", "Desktop")
-        self.setWindowTitle("Mokka ECU Lab · read-only diagnostics")
-        self.resize(1320, 860)
-        self.setStyleSheet(STYLE)
+        self.setWindowTitle(f"Mokka ECU Lab {__version__} · read-only diagnostics")
+        self.resize(1366, 768); self.setMinimumSize(760, 480)
+        self.setWindowIcon(icon('research', 48)); self.setStyleSheet(STYLE)
+        self.signal_values = {}; self._chart_signature = None
         central = QWidget(); self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        title = QLabel("MOKKA ECU LAB")
-        title.setStyleSheet("font-size: 23px; font-weight: 600; color: #8cddd0; padding: 6px;")
-        layout.addWidget(title)
-        layout.addWidget(QLabel("Local acquisition • Mode 01 allowlist • No manufacturer live queries • No telemetry"))
+        shell = QVBoxLayout(central); shell.setContentsMargins(0, 0, 0, 0); shell.setSpacing(0)
+        header = QHBoxLayout(); header.setContentsMargins(16, 10, 16, 10); header.setSpacing(16)
+        brand = QLabel("MOKKA ECU LAB"); brand.setObjectName('brand'); header.addWidget(brand)
+        subtitle=caption(f"v{__version__}  ·  Read-only vehicle diagnostics"); subtitle.setWordWrap(False)
+        header.addWidget(subtitle); header.addStretch()
+        header.addWidget(caption('LOCAL / PRIVATE'))
+        self.connection_toggle = self.button('Connection settings', self.toggle_connection)
+        header.addWidget(self.connection_toggle); shell.addLayout(header)
+        body = QHBoxLayout(); body.setSpacing(0)
+        workspace = QWidget(); layout = QVBoxLayout(workspace); layout.setContentsMargins(16, 0, 16, 8); layout.setSpacing(8)
         self.build_connection(layout)
-        self.status = QLabel("Adapter: disconnected   |   ECU: unavailable   |   No connection starts automatically")
-        self.status.setWordWrap(True); layout.addWidget(self.status)
-        self.tabs = QTabWidget(); layout.addWidget(self.tabs)
+        self.status = QLabel("Disconnected · no connection starts automatically"); self.status.setObjectName('caption')
+        self.status.setWordWrap(True); self.status.setVisible(False)
+        self.status_indicators = {}
+        states = FlowLayout(spacing=6)
+        for name in ('Source', 'Connection', 'ECU', 'Polling', 'Recording', 'Activity'):
+            label = QLabel(); label.setObjectName('badge'); label.setAccessibleName(name)
+            states.addWidget(label); self.status_indicators[name] = label
+        states.addStretch(); layout.addLayout(states)
+        self.tabs = QTabWidget(); self.tabs.tabBar().hide(); layout.addWidget(self.tabs, 1)
         self.build_dashboard(); self.build_sessions(); self.build_raw(); self.build_explorer(); self.build_research()
-        self.build_discovery()
-        self.build_capture()
-        self.statusBar().showMessage("Ready. Select Simulation and Connect to develop without a vehicle.")
+        self.build_discovery(); self.build_capture()
+        self.ensurePolished()
+        for widget in self.findChildren(QWidget): widget.ensurePolished()
+        # Keep the established seven page indices/API, with scrollable content.
+        self.tabs.blockSignals(True)
+        for i in range(self.tabs.count()):
+            page = self.tabs.widget(i); title = self.tabs.tabText(i)
+            self.tabs.removeTab(i); self.tabs.insertTab(i, scroll_page(page), title)
+        self.tabs.setCurrentIndex(0); self.tabs.blockSignals(False)
+        self.sidebar = Sidebar(self.tabs); body.addWidget(self.sidebar); body.addWidget(workspace, 1); shell.addLayout(body, 1)
+        self.statusBar().showMessage("Ready · choose a source and connect explicitly. All evidence stays local.")
+        self.statusBar().setSizeGripEnabled(False)
+        QShortcut(QKeySequence('Ctrl+Shift+R'), self, activated=self.record_button.click)
+        self.refresh_presentation()
         self.timer = QTimer(self); self.timer.timeout.connect(self.drain); self.timer.start(100)
         self.refresh_sessions(); self.refresh_ports()
 
@@ -153,34 +167,67 @@ class MainWindow(QMainWindow):
         self.send("record_stop")
 
     def notice(self, message):
-        self.statusBar().showMessage(message, 20000)
+        self.statusBar().showMessage(message)
         self.messages.append(f"{datetime.now().isoformat(timespec='seconds')}  {message}")
 
     def build_connection(self, layout):
-        row = QHBoxLayout()
-        self.source = QComboBox(); self.source.addItems(["Simulation", "Bluetooth serial"])
-        self.port = QComboBox(); self.port.setEditable(True)
-        self.port.setMinimumContentsLength(8)
+        self.connection_panel = QFrame(); self.connection_panel.setObjectName('panel')
+        panel = QVBoxLayout(self.connection_panel); panel.setContentsMargins(12, 8, 12, 8); panel.setSpacing(6)
+        row = QHBoxLayout(); row.setSpacing(8)
+        self.source = QComboBox(); self.source.addItems(["Simulation", "Bluetooth / Serial LIVE"])
+        self.source.setAccessibleName('Connection source'); self.source.setMinimumWidth(170)
+        self.port = QComboBox(); self.port.setEditable(True); self.port.setMinimumContentsLength(6)
         self.port.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.port.setMaximumWidth(240)
+        self.port.setMaximumWidth(180); self.port.setAccessibleName('Outgoing serial port')
         self.port.currentIndexChanged.connect(lambda i: self.port.setToolTip(self.port.itemData(i, Qt.ItemDataRole.ToolTipRole) or "Manual outgoing serial port"))
-        self.baud = QComboBox(); self.baud.addItems(["115200", "38400", "9600"])
-        self.scenario = QComboBox(); self.scenario.addItems(SCENARIOS)
+        self.baud = QComboBox(); self.baud.addItems(["115200", "38400", "9600"]); self.baud.setAccessibleName('Serial baud rate')
+        self.scenario = QComboBox(); self.scenario.addItems(SCENARIOS); self.scenario.setAccessibleName('Simulation scenario')
+        self.scenario.setMinimumContentsLength(12); self.scenario.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.live_config = QWidget(); live = QHBoxLayout(self.live_config); live.setContentsMargins(0,0,0,0)
+        self.refresh_port_button = self.button('Refresh', self.refresh_ports)
+        for w in (QLabel('Port'), self.port, self.refresh_port_button, QLabel('Baud'), self.baud): live.addWidget(w)
+        self.sim_config = QWidget(); sim = QHBoxLayout(self.sim_config); sim.setContentsMargins(0,0,0,0)
+        sim.addWidget(QLabel('Scenario')); sim.addWidget(self.scenario, 1)
         self.rate = QDoubleSpinBox(); self.rate.setRange(.25, 4); self.rate.setValue(4); self.rate.setSuffix(" total req/s")
+        self.rate.setAccessibleName('Aggregate request rate; maximum four per second')
         self.rate.valueChanged.connect(lambda v: self.send("rate", rate=v))
-        self.connect_button = self.button("Connect", self.connect_adapter, "primary")
-        self.disconnect_button = self.button("Disconnect", lambda: self.send("disconnect"), "stop")
+        self.connect_button = self.button("Start Simulation", self.connect_adapter, "primary")
+        self.disconnect_button = self.button("Disconnect", lambda: self.send("disconnect"))
         self.stop_button = self.button("Stop polling", lambda: self.send("stop"), "stop")
-        self.start_button = self.button("Resume", lambda: self.send("start"))
-        for w in (self.source, self.port, self.button("Refresh ports", self.refresh_ports), self.baud, self.scenario, self.rate,
-                  self.connect_button, self.disconnect_button, self.stop_button, self.start_button): row.addWidget(w)
-        layout.addLayout(row)
-        self.source.currentIndexChanged.connect(self.update_connection_controls)
-        self.update_connection_controls()
+        self.start_button = self.button("Resume polling", lambda: self.send("start"))
+        for w in (self.source, self.live_config, self.sim_config, self.connect_button, self.disconnect_button): row.addWidget(w)
+        row.addStretch(); panel.addLayout(row)
+        row2 = QHBoxLayout()
+        safety=caption('READ ONLY  ·  Maximum 4 requests/s'); safety.setWordWrap(False); row2.addWidget(safety)
+        self.advanced_connection = self.button('Rate settings', lambda: self.rate.setVisible(not self.rate.isVisible()))
+        row2.addWidget(self.advanced_connection); row2.addWidget(self.rate); self.rate.hide(); row2.addStretch()
+        row2.addWidget(self.stop_button); row2.addWidget(self.start_button); panel.addLayout(row2)
+        layout.addWidget(self.connection_panel)
+        self.source.currentIndexChanged.connect(self.update_connection_controls); self.update_connection_controls()
+
+    def toggle_connection(self):
+        self.connection_panel.setVisible(not self.connection_panel.isVisible())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'sidebar'): self.sidebar.set_compact(self.width() < 1120)
+        if hasattr(self, 'sensor_cards'): self.arrange_cards()
 
     def update_connection_controls(self):
         live = self.source.currentIndex() == 1
-        self.port.setEnabled(live); self.baud.setEnabled(live); self.scenario.setEnabled(not live)
+        self.live_config.setVisible(live); self.sim_config.setVisible(not live)
+        changing = self.connected or self.mode == 'Connecting'
+        self.port.setEnabled(live and not changing); self.baud.setEnabled(live and not changing)
+        self.scenario.setEnabled(not live and not changing); self.source.setEnabled(not changing)
+        self.refresh_port_button.setEnabled(live and not changing)
+        self.connect_button.setText('Connected' if self.connected else 'Connecting…' if self.mode == 'Connecting' else 'Connect' if live else 'Start Simulation')
+        if hasattr(self,'greek') and self.greek.isChecked():
+            self.connect_button.setText('Συνδέθηκε' if self.connected else 'Σύνδεση…' if self.mode=='Connecting' else 'Σύνδεση')
+        self.connect_button.setEnabled(not changing)
+        self.disconnect_button.setEnabled(changing)
+        self.stop_button.setEnabled(self.polling_active or self.discovery_active)
+        self.start_button.setEnabled(self.connected and not self.polling_active and not self.requires_reconnect and not self.discovery_active)
+        self.start_button.setToolTip('Reconnect explicitly after an acquisition failure' if self.requires_reconnect else 'Resume basic polling on the current connection')
 
     def refresh_ports(self):
         current = self.port.currentText().strip()
@@ -199,73 +246,75 @@ class MainWindow(QMainWindow):
         self.connected = False
         self.request_count = self.error_count = 0
         self.connect_button.setEnabled(False)
+        self.update_connection_controls()
         self.send("connect", simulation=self.source.currentIndex() == 0,
                   port=self.port.currentText().strip(),
                   baud=int(self.baud.currentText()), scenario=self.scenario.currentText())
 
     def build_dashboard(self):
-        tab = QWidget(); layout = QVBoxLayout(tab)
-        self.banner = QLabel("OFFLINE · no measurements")
-        self.banner.setStyleSheet("font-size: 20px; font-weight: 600; color: #eabf75; padding: 10px;")
-        layout.addWidget(self.banner)
+        tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0, 4, 0, 0); layout.setSpacing(8)
+        page_heading(layout, 'Vehicle overview', 'Measured signals, with source and freshness. Availability never implies component health.')
         row = QHBoxLayout()
-        self.ecu = QComboBox(); self.ecu.addItem("Automatic first responding ECU", "")
+        self.ecu = QComboBox(); self.ecu.addItem("Automatic first responding ECU", ""); self.ecu.setAccessibleName('Selected ECU')
+        self.record_button = self.button("Start recording", lambda: self.send("record"), "primary")
+        self.record_stop_button = self.button("Finish recording", lambda: self.send("record_stop"))
+        self.focus_dashboard = QCheckBox('Focused capture'); self.focus_dashboard.setToolTip('At most seven indications from supported evidence; no automatic requests')
+        for w in (QLabel('ECU'), self.ecu, self.focus_dashboard, self.record_button, self.record_stop_button): row.addWidget(w)
+        row.addStretch(); layout.addLayout(row)
+        self.banner = caption('OFFLINE · no measurements'); layout.addWidget(self.banner)
+        self.rejection_reason = caption(''); layout.addWidget(self.rejection_reason)
+        self.coverage = caption('No current connection coverage'); self.coverage.setVisible(False)
+        self.cards_grid = QGridLayout(); self.cards_grid.setSpacing(8)
+        self.sensor_cards = [SensorCard() for _ in range(7)]; layout.addLayout(self.cards_grid)
+        self.arrange_cards()
+        self.dashboard_sections = QTabWidget(); layout.addWidget(self.dashboard_sections, 1)
+        trend = QWidget(); t = QVBoxLayout(trend); t.setContentsMargins(0,8,0,0)
+        trend_row = QHBoxLayout(); self.trend_sensor = QComboBox()
+        for pid, sensor in self.registry.items(): self.trend_sensor.addItem(sensor.name, pid)
+        self.trend_sensor.currentIndexChanged.connect(self.refresh_signal_chart)
+        trend_row.addWidget(QLabel('Signal history')); trend_row.addWidget(self.trend_sensor); trend_row.addStretch()
+        self.trend_note = caption('At least two acquired samples are needed.'); trend_row.addWidget(self.trend_note); t.addLayout(trend_row)
+        self.signal_chart = QChart(); self.signal_chart_view = QChartView(self.signal_chart); self.signal_chart_view.setMinimumHeight(150)
+        t.addWidget(self.signal_chart_view,1); self.dashboard_sections.addTab(trend, 'Signal history')
+        self.dashboard = table(["Measurement", "Value", "Units", "State", "Rate", "Last success (UTC)", "ECU", "Evidence", "Actual interval", "Gap / age", "Priority"])
+        self.dashboard.setMinimumHeight(140); self.dashboard_sections.addTab(self.dashboard, 'All measurements')
+        settings = QWidget(); config = QVBoxLayout(settings)
         self.units = QCheckBox("Alternate units (°F, mph, bar, kg/h)")
-        self.greek = QCheckBox("Ελληνικές ετικέτες")
-        self.greek.toggled.connect(self.update_language)
-        self.record_button = self.button("Start Recording", lambda: self.send("record"), "primary")
-        self.record_stop_button = self.button("Stop Recording", lambda: self.send("record_stop"))
-        for w in (QLabel("ECU source:"), self.ecu, self.units, self.greek, self.record_button, self.record_stop_button): row.addWidget(w)
-        layout.addLayout(row)
-        instructions = QLabel("Before switching ignition OFF: Stop Recording and Stop polling, then Disconnect. Finish session stops both; Disconnect also closes any open recording.")
-        instructions.setWordWrap(True); layout.addWidget(instructions)
-        priority_row = QHBoxLayout()
-        self.use_priorities = QCheckBox("Use sensor priorities (same total rate ceiling)")
+        self.greek = QCheckBox("Ελληνικές ετικέτες"); self.greek.toggled.connect(self.update_language)
+        preferences = QHBoxLayout(); preferences.addWidget(self.units); preferences.addWidget(self.greek); preferences.addStretch(); config.addLayout(preferences)
+        priority_row = QHBoxLayout(); self.use_priorities = QCheckBox("Use sensor priorities")
         self.priority_sensor = QComboBox()
         for pid, sensor in self.registry.items(): self.priority_sensor.addItem(sensor.name, pid)
-        self.priority_weight = QSpinBox(); self.priority_weight.setRange(1, 4)
-        self.priority_weight.setValue(self.priorities[self.priority_sensor.currentData()])
-        self.priority_sensor.currentIndexChanged.connect(self.select_priority)
-        self.priority_weight.valueChanged.connect(self.change_priority)
-        self.use_priorities.toggled.connect(self.send_priorities)
-        self.priority_sensor.setEnabled(False); self.priority_weight.setEnabled(False)
-        for w in (self.use_priorities, self.priority_sensor, QLabel("Priority 1–4:"), self.priority_weight,
-                  self.button("Finish session", self.finish_session)): priority_row.addWidget(w)
-        layout.addLayout(priority_row)
-        self.rejection_reason = QLabel(""); self.rejection_reason.setWordWrap(True); layout.addWidget(self.rejection_reason)
-        self.coverage = QLabel("No current connection coverage"); self.coverage.setWordWrap(True); layout.addWidget(self.coverage)
-        split = QSplitter()
-        self.sensor_list = QListWidget(); self.sensor_list.setMaximumWidth(285)
-        self.sensor_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.priority_weight = QSpinBox(); self.priority_weight.setRange(1, 4); self.priority_weight.setValue(self.priorities[self.priority_sensor.currentData()])
+        self.priority_sensor.currentIndexChanged.connect(self.select_priority); self.priority_weight.valueChanged.connect(self.change_priority)
+        self.use_priorities.toggled.connect(self.send_priorities); self.priority_sensor.setEnabled(False); self.priority_weight.setEnabled(False)
+        for w in (self.use_priorities, self.priority_sensor, QLabel('Weight'), self.priority_weight): priority_row.addWidget(w)
+        config.addLayout(priority_row)
+        replacement_row=FlowLayout(); replacement_row.addWidget(QLabel('Focused indication replacement'))
+        self.focus_replacement=QComboBox(); self.focus_replacement.addItem('Automatic eligible readings',None)
+        self.focus_replacement.setAccessibleName('Replace a focused indication using a recorded supported reading')
+        self.focus_replacement.currentIndexChanged.connect(self.refresh_cards); replacement_row.addWidget(self.focus_replacement); config.addLayout(replacement_row)
+        self.sensor_list = QListWidget(); self.sensor_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         stored = self.settings.value("sensor_order", list(self.registry), type=list)
-        order = [int(x) for x in stored if int(x) in self.registry]
-        order += [x for x in self.registry if x not in order]
+        order = [int(x) for x in stored if int(x) in self.registry]; order += [x for x in self.registry if x not in order]
         for pid in order:
-            item = QListWidgetItem(self.registry[pid].name)
-            item.setData(Qt.ItemDataRole.UserRole, pid)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-            self.sensor_list.addItem(item)
-        self.sensor_list.itemChanged.connect(self.select_sensors)
-        self.sensor_list.model().rowsMoved.connect(self.select_sensors)
-        split.addWidget(self.sensor_list)
-        self.dashboard = table(["Measurement", "Value", "Units", "State", "Rate", "Last success (UTC)", "ECU", "Evidence", "Actual interval", "Gap / age", "Priority"])
-        split.addWidget(self.dashboard); split.setStretchFactor(1, 1)
-        layout.addWidget(QLabel("Choose sensors with checkboxes; drag to reorder. Base units remain unchanged in recordings."))
-        layout.addWidget(split, 1)
-        self.stats = QLabel("Recording: off   |   Requests: 0   |   Errors: 0")
-        layout.addWidget(self.stats)
-        self.messages = QTextEdit(); self.messages.setReadOnly(True); self.messages.setMaximumHeight(95)
-        self.messages.document().setMaximumBlockCount(150)
-        layout.addWidget(self.messages)
+            item = QListWidgetItem(self.registry[pid].name); item.setData(Qt.ItemDataRole.UserRole, pid)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable); item.setCheckState(Qt.CheckState.Checked); self.sensor_list.addItem(item)
+        self.sensor_list.itemChanged.connect(self.select_sensors); self.sensor_list.model().rowsMoved.connect(self.select_sensors)
+        config.addWidget(caption('Choose sensors; drag to reorder. Recordings always retain original base units.'))
+        config.addWidget(self.sensor_list); self.dashboard_sections.addTab(settings, 'Sensor selection')
+        self.messages = QTextEdit(); self.messages.setReadOnly(True); self.messages.document().setMaximumBlockCount(150)
+        self.dashboard_sections.addTab(self.messages, 'Activity log')
+        self.stats = caption('Recording: off · Requests: 0 · Errors: 0'); layout.addWidget(self.stats)
         self.tabs.addTab(tab, "Dashboard")
 
     def update_language(self, enabled):
         labels = ["Πίνακας", "Συνεδρίες", "Ακατέργαστα", "Αισθητήρες", "Έρευνα", "Ανακάλυψη", "Drive Capture"] if enabled else ["Dashboard", "Sessions", "Raw Data", "Sensor Explorer", "Research", "Discovery", "Drive Capture"]
         for i, label in enumerate(labels): self.tabs.setTabText(i, label)
-        self.connect_button.setText("Σύνδεση" if enabled else "Connect")
+        if hasattr(self, "sidebar"): self.sidebar.set_compact(self.sidebar.compact)
+        self.connect_button.setText("Σύνδεση" if enabled else "Start Simulation" if self.source.currentIndex()==0 else "Connect")
         self.disconnect_button.setText("Αποσύνδεση" if enabled else "Disconnect")
-        self.stop_button.setText("Διακοπή" if enabled else "Stop")
+        self.stop_button.setText("Διακοπή" if enabled else "Stop polling")
 
     def select_sensors(self, *args):
         self.send("select", pids=[self.sensor_list.item(i).data(Qt.ItemDataRole.UserRole)
@@ -286,31 +335,46 @@ class MainWindow(QMainWindow):
         self.send("priorities", enabled=enabled, weights=dict(self.priorities))
 
     def build_sessions(self):
-        tab = QWidget(); layout = QVBoxLayout(tab); row = QHBoxLayout()
-        for label, callback in [("Start Recording", lambda: self.send("record")), ("Stop Recording", lambda: self.send("record_stop")),
-                                ("Refresh", self.refresh_sessions), ("Replay selected", self.replay_session),
-                                ("Open JSONL replay…", self.open_replay), ("Export CSV…", self.csv_export), ("Export JSONL…", self.jsonl_export)]:
-            row.addWidget(self.button(label, callback))
-        layout.addLayout(row)
-        self.bundle_button = self.button('Export Research Bundle',self.bundle_export)
-        layout.addWidget(self.bundle_button)
-        layout.addWidget(self.button('Recorded trends from CSV / Research Bundle…',self.open_trends))
-        instructions = QLabel("Before ignition OFF: Stop Recording and Stop polling, then Disconnect. Either Stop order is supported. Disconnect finalizes an open journal and SQLite session.")
-        instructions.setWordWrap(True); layout.addWidget(instructions)
-        self.diagnostic_export = QCheckBox("Diagnostic support export: include original adapter/port, identification bytes and marker notes")
-        layout.addWidget(self.diagnostic_export)
-        layout.addWidget(QLabel("Vehicle: Opel Mokka B, 2022, 1.5 diesel. VIN is never queried. Adapter identifiers are redacted by default."))
-        self.session_table = table(["Session", "Started (UTC)", "Ended (UTC)", "Duration", "Source", "Requests", "Errors"])
-        layout.addWidget(self.session_table)
-        self.session_info = QLabel(str(self.root)); self.session_info.setWordWrap(True); layout.addWidget(self.session_info)
-        controls = QHBoxLayout()
-        self.replay_speed = QComboBox(); self.replay_speed.addItems(["1× original", "2×", "5×", "10×"])
-        controls.addWidget(self.replay_speed)
-        controls.addWidget(self.button("Play replay", lambda: self.send("replay_play", speed=[1., 2., 5., 10.][self.replay_speed.currentIndex()])))
-        controls.addWidget(self.button("Pause / Stop", lambda: self.send("stop")))
-        controls.addWidget(self.button("Step one transaction", lambda: self.send("step")))
-        controls.addStretch(); layout.addLayout(controls)
+        tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0)
+        page_heading(layout, 'Recorded sessions', 'Local journals and measurements. Finish a recording before creating an evidence bundle.')
+        row = QHBoxLayout()
+        self.session_record_button=self.button('Start recording',lambda:self.send('record'))
+        self.session_finish_button=self.button('Finish recording',lambda:self.send('record_stop'))
+        row.addWidget(self.session_record_button); row.addWidget(self.session_finish_button)
+        for label, callback in [("Refresh", self.refresh_sessions), ("Replay selected", self.replay_session), ("Open replay…", self.open_replay)]: row.addWidget(self.button(label, callback))
+        row.addStretch(); layout.addLayout(row)
+        self.session_table = table(["Session", "Started (UTC)", "Ended (UTC)", "Duration", "Source", "Transactions", "Errors", "Completion", "ECU"])
+        self.session_table.setMinimumHeight(150); layout.addWidget(self.session_table,1)
+        self.session_table.itemSelectionChanged.connect(self.session_selection_changed)
+        exports = QGroupBox('Export selected session · private local files'); export_layout = QGridLayout(exports)
+        self.bundle_button = self.button('Research Bundle ZIP…',self.bundle_export, 'primary')
+        self.csv_button = self.button('Measurements CSV…',self.csv_export); self.jsonl_button = self.button('Raw journal JSONL…',self.jsonl_export)
+        for col, (b, text) in enumerate(((self.bundle_button,'Complete evidence, checksums and source context'),(self.csv_button,'Decoded measurements in original units'),(self.jsonl_button,'Recorded original diagnostic transactions'))):
+            export_layout.addWidget(b,0,col); export_layout.addWidget(caption(text),1,col)
+        export_layout.addWidget(self.button('Private HTML / JSON report…',self.open_private_report),2,0)
+        export_layout.addWidget(caption('Import a bundle in Research, select its source, then export the offline report.'),2,1,1,2)
+        layout.addWidget(exports)
+        self.diagnostic_export = QCheckBox('Include original adapter/port, identification bytes and marker notes in diagnostic JSONL')
+        self.diagnostic_export.setToolTip('Private identifying metadata. Redaction is enabled by default. Review before sharing.'); layout.addWidget(self.diagnostic_export)
+        layout.addWidget(caption('Files stay on this computer. No automatic uploads. VIN is never queried; adapter metadata is redacted by default.'))
+        self.session_info = caption(str(self.root)); layout.addWidget(self.session_info)
+        controls = QHBoxLayout(); self.replay_speed = QComboBox(); self.replay_speed.addItems(["1× original", "2×", "5×", "10×"])
+        controls.addWidget(QLabel('Offline replay')); controls.addWidget(self.replay_speed)
+        controls.addWidget(self.button("Play", lambda: self.send("replay_play", speed=[1., 2., 5., 10.][self.replay_speed.currentIndex()])))
+        controls.addWidget(self.button("Pause replay", lambda: self.send("stop")))
+        controls.addWidget(self.button("Step transaction", lambda: self.send("step")))
+        controls.addWidget(self.button('Recorded trends…',self.open_trends)); controls.addStretch(); layout.addLayout(controls)
         self.tabs.addTab(tab, "Sessions")
+
+    def session_selection_changed(self):
+        session = self.current_session()
+        for button in (self.csv_button, self.jsonl_button): button.setEnabled(bool(session))
+        if session:
+            self.session_info.setText(f"Selected {session['id'][:12]} · {session['mode']} · {session['requests']} transactions · " + ('Closed' if session['ended'] else 'Open / interrupted') + f" · Stored in {self.root}")
+
+    def open_private_report(self):
+        self.tabs.setCurrentIndex(4); self.research_view.tabs.setCurrentIndex(1)
+        self.notice('Import a local Research Bundle, choose a source group, then export a private report.')
 
     def refresh_sessions(self):
         try:
@@ -320,8 +384,10 @@ class MainWindow(QMainWindow):
             for index, s in enumerate(self.sessions):
                 end = datetime.fromisoformat(s["ended"]) if s["ended"] else datetime.now().astimezone()
                 duration = (end - datetime.fromisoformat(s["started"])).total_seconds()
-                add_row(self.session_table, [s["id"][:12], s["started"], s["ended"] or "Open / interrupted", f"{duration:.1f} s", s["mode"], s["requests"], s["errors"]])
+                evidence=json.loads(s.get('metadata') or '{}').get('capture_evidence',{})
+                add_row(self.session_table, [s["id"][:12], s["started"], s["ended"] or "Open / interrupted", f"{duration:.1f} s", s["mode"], s["requests"], s["errors"], "Closed" if s["ended"] else "Open / interrupted", ", ".join(evidence.get("support", {})) or "Not recorded"])
                 if previous and s["id"] == previous["id"]: self.session_table.selectRow(index)
+            self.session_selection_changed()
         except Exception as exc: self.notice(str(exc))
 
     def open_trends(self):
@@ -358,7 +424,7 @@ class MainWindow(QMainWindow):
         if not s: return self.notice("Select a session to export")
         path, _ = QFileDialog.getSaveFileName(self, "Export original decoded units", str(self.root / (s["id"] + ".csv")), "CSV (*.csv)")
         if path:
-            try: export_csv(self.root, s["id"], Path(path)); self.notice("CSV exported")
+            try: export_csv(self.root, s["id"], Path(path)); self.notice(f"CSV saved locally: {path}")
             except Exception as exc: self.notice(str(exc))
 
     def jsonl_export(self):
@@ -366,7 +432,7 @@ class MainWindow(QMainWindow):
         if not s: return self.notice("Select a session to export")
         path, _ = QFileDialog.getSaveFileName(self, "Export raw journal", str(self.root / (s["id"] + "-export.jsonl")), "JSONL (*.jsonl)")
         if path:
-            try: export_jsonl(self.root / s["raw_path"], Path(path), self.diagnostic_export.isChecked()); self.notice("JSONL exported")
+            try: export_jsonl(self.root / s["raw_path"], Path(path), self.diagnostic_export.isChecked()); self.notice(f"JSONL saved locally: {path}")
             except Exception as exc: self.notice(str(exc))
 
     def bundle_export(self,latest=False):
@@ -379,41 +445,75 @@ class MainWindow(QMainWindow):
         if path:
             try:
                 export_research_bundle(self.root,session['id'],Path(path))
-                self.notice('Research Bundle saved locally: redacted evidence, intervals, errors and SHA-256 checksums. Original journal unchanged.')
+                self.notice(f'Research Bundle saved locally: {path} · redacted evidence with SHA-256 checksums; original journal unchanged.')
             except Exception as exc: self.notice(str(exc))
 
     def build_raw(self):
-        tab = QWidget(); layout = QVBoxLayout(tab)
-        layout.addWidget(QLabel("Latest 500 transactions shown. All recorded transactions are retained on disk. Select a row for the complete reply."))
+        tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0)
+        page_heading(layout, 'Raw transactions', 'Original replies remain intact. Latest 500 shown; recording retains every transaction on disk.')
+        row = QHBoxLayout()
+        self.raw_search = QLineEdit(); self.raw_search.setPlaceholderText('Filter ECU, PID / command, status or error'); self.raw_search.setAccessibleName('Filter raw transactions')
+        self.raw_status_filter = QComboBox(); self.raw_status_filter.addItems(['All statuses','Successful','Errors'])
+        self.raw_search.textChanged.connect(self.filter_raw); self.raw_status_filter.currentIndexChanged.connect(self.filter_raw)
+        row.addWidget(self.raw_search,1); row.addWidget(self.raw_status_filter); row.addWidget(self.button('Copy original response',self.copy_raw_response)); layout.addLayout(row)
         self.raw_table = table(["UTC timestamp", "Command", "Status", "Latency ms", "ECU", "Parsed payload", "Decoder", "Error"])
-        layout.addWidget(self.raw_table)
-        self.raw_detail = QTextEdit(); self.raw_detail.setReadOnly(True); self.raw_detail.setMaximumHeight(230)
-        layout.addWidget(self.raw_detail)
-        self.raw_table.itemSelectionChanged.connect(self.show_raw_detail)
-        self.tabs.addTab(tab, "Raw Data")
+        self.raw_table.setObjectName('rawTransactions')
+        self.raw_table.setMinimumHeight(160); layout.addWidget(self.raw_table,1)
+        self.raw_detail = QTextEdit(); self.raw_detail.setReadOnly(True); self.raw_detail.setFont(QFont('Consolas',10)); self.raw_detail.setMinimumHeight(160)
+        self.raw_detail.setObjectName('byteText')
+        self.raw_detail.setPlaceholderText('Select a transaction to inspect original text and hex separately from interpretation.'); layout.addWidget(self.raw_detail,1)
+        self.raw_table.itemSelectionChanged.connect(self.show_raw_detail); self.tabs.addTab(tab, "Raw Data")
+
+    def filter_raw(self, *args):
+        query = self.raw_search.text().strip().lower(); status = self.raw_status_filter.currentIndex()
+        for row in range(self.raw_table.rowCount()):
+            cells = [self.raw_table.item(row,col).text() if self.raw_table.item(row,col) else '' for col in range(self.raw_table.columnCount())]
+            ok = cells[2] == 'OK'
+            self.raw_table.setRowHidden(row, (query not in ' '.join(cells).lower()) or (status==1 and not ok) or (status==2 and ok))
+
+    def copy_raw_response(self):
+        row = self.raw_table.currentRow()
+        if not 0 <= row < len(self.raw_records): return self.notice('Select a raw transaction first')
+        raw = base64.b64decode(self.raw_records[row].get('raw_b64',''))
+        QApplication.clipboard().setText(raw.decode('ascii','replace')); self.notice('Original response copied locally')
 
     def show_raw_detail(self):
         row = self.raw_table.currentRow()
         if 0 <= row < len(self.raw_records):
             record = self.raw_records[row]
-            raw = base64.b64decode(record["raw_b64"])
+            raw = base64.b64decode(record.get("raw_b64", ""))
             self.raw_detail.setPlainText("Original response (text):\n" + raw.decode('ascii', 'replace') +
                 "\nOriginal response (hex):\n" + raw.hex(' ') + "\n\nTransaction metadata:\n" + json.dumps(record, indent=2, ensure_ascii=False))
 
     def build_explorer(self):
-        tab = QWidget(); layout = QVBoxLayout(tab)
-        layout.addWidget(QLabel("STANDARD_VERIFIED validates the published formula; it does not assert support or accuracy on your vehicle. No DPF decoder is registered."))
+        tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0)
+        page_heading(layout, 'Sensor explorer', 'Documented formulas and actual ECU availability are separate. Inspect a sensor for its exact metadata.')
+        row = QHBoxLayout(); self.explorer_search = QLineEdit(); self.explorer_search.setPlaceholderText('Search sensor, PID, units or evidence')
+        self.explorer_category = QComboBox(); self.explorer_category.addItems(['All categories','Engine','Temperature','Air / pressure','Vehicle'])
+        self.explorer_search.textChanged.connect(self.filter_explorer); self.explorer_category.currentIndexChanged.connect(self.filter_explorer)
+        row.addWidget(self.explorer_search,1); row.addWidget(self.explorer_category); layout.addLayout(row)
         self.explorer = table(["Sensor", "Request", "Service / positive", "ECU", "Layout", "Formula", "Units", "Poll rate", "Verification", "Last value", "Last UTC", "State / evidence"])
-        layout.addWidget(self.explorer)
-        self.sensor_detail = QTextEdit(); self.sensor_detail.setReadOnly(True); self.sensor_detail.setMaximumHeight(230)
-        layout.addWidget(self.sensor_detail)
-        self.explorer.itemSelectionChanged.connect(self.show_sensor_detail)
-        self.tabs.addTab(tab, "Sensor Explorer")
+        self.explorer.setMinimumHeight(180); layout.addWidget(self.explorer,2)
+        for col in (2,4,5,10): self.explorer.setColumnHidden(col,True)
+        self.explorer_technical = QCheckBox('Show technical columns'); self.explorer_technical.toggled.connect(lambda show: [self.explorer.setColumnHidden(c,not show) for c in (2,4,5,10)])
+        layout.addWidget(self.explorer_technical)
+        self.sensor_detail = QTextEdit(); self.sensor_detail.setReadOnly(True); self.sensor_detail.setMinimumHeight(150); layout.addWidget(self.sensor_detail,1)
+        self.sensor_detail.setPlaceholderText('Select a sensor to inspect its formula, units and exact verification metadata.')
+        self.explorer.itemSelectionChanged.connect(self.show_sensor_detail); self.tabs.addTab(tab, "Sensor Explorer")
+
+    def filter_explorer(self, *args):
+        query = self.explorer_search.text().lower(); category = self.explorer_category.currentText()
+        for row,sensor in enumerate(self.registry.values()):
+            pid = sensor.pid
+            group = 'Temperature' if pid in {5,15} else 'Air / pressure' if pid in {11,16,51} else 'Vehicle' if pid==13 else 'Engine'
+            text = ' '.join(self.explorer.item(row,c).text() for c in range(self.explorer.columnCount()) if self.explorer.item(row,c))
+            self.explorer.setRowHidden(row, query not in text.lower() or (category!='All categories' and category!=group))
 
     def show_sensor_detail(self):
         row = self.explorer.currentRow()
         if 0 <= row < len(self.registry):
-            self.sensor_detail.setPlainText(json.dumps(list(self.registry.values())[row].metadata, indent=2, ensure_ascii=False))
+            sensor=list(self.registry.values())[row]
+            self.sensor_detail.setPlainText(f'{sensor.name} · 01{sensor.pid:02X} · {sensor.unit}\nPublished formula documentation does not establish vehicle support or independent accuracy.\n\nExact metadata:\n'+json.dumps(sensor.metadata, indent=2, ensure_ascii=False))
 
     def build_research(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
@@ -424,7 +524,7 @@ class MainWindow(QMainWindow):
         self.payloads = QTextEdit(); self.payloads.setPlaceholderText("04 80\n04 90\n04 A0"); self.payloads.setMaximumHeight(90)
         self.measured = QTextEdit(); self.measured.setPlaceholderText("Measured reference (one numeric value per line)"); self.measured.setMaximumHeight(90)
         row.addWidget(self.payloads); row.addWidget(self.measured); layout.addLayout(row)
-        options = QHBoxLayout()
+        options = FlowLayout()
         self.byte_start = QSpinBox(); self.byte_start.setRange(0, 63)
         self.byte_length = QSpinBox(); self.byte_length.setRange(1, 8); self.byte_length.setValue(2)
         self.scale = QDoubleSpinBox(); self.scale.setRange(-1e9, 1e9); self.scale.setDecimals(8); self.scale.setValue(1)
@@ -434,7 +534,7 @@ class MainWindow(QMainWindow):
         options.addWidget(self.button("Evaluate hypotheses", self.evaluate))
         options.addWidget(self.button("Save report…", self.save_report))
         layout.addLayout(options)
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         actions.addWidget(self.button("Load payloads from JSONL…", self.load_analysis))
         actions.addWidget(self.button("Compare recordings…", self.compare_recordings))
         self.analysis_pid = QLineEdit("7A"); self.analysis_pid.setMaximumWidth(65)
@@ -551,57 +651,69 @@ class MainWindow(QMainWindow):
         return self.ecu.currentData() or (next(iter(self.support), None))
 
     def build_capture(self):
-        tab=QWidget(); layout=QVBoxLayout(tab)
-        label=QLabel('Connect → Start Recording → Standard Discovery (stationary) → Drive Capture preset → Start Drive Capture → Finish session → Export Research Bundle')
-        label.setWordWrap(True); layout.addWidget(label)
-        controls=QHBoxLayout()
-        self.capture_source=QComboBox(); self.capture_source.setModel(self.ecu.model())
-        self.capture_source.currentIndexChanged.connect(self.ecu.setCurrentIndex)
-        self.ecu.currentIndexChanged.connect(self.capture_source.setCurrentIndex)
-        self.capture_preset=self.button('Drive Capture',self.prepare_capture)
+        tab=QWidget(); layout=QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0); layout.setSpacing(8)
+        page_heading(layout, 'Drive capture', 'Prepare while stationary. During a journey, use passive monitoring; a passenger operates the laptop.')
+        self.capture_stepper = CaptureStepper(self.show_capture_step); layout.addWidget(self.capture_stepper)
+        self.capture_step_help = caption('Record before connecting to preserve initialization evidence. Each action starts only when you press its button.'); layout.addWidget(self.capture_step_help)
+        controls=FlowLayout(); self.capture_source=QComboBox(); self.capture_source.setModel(self.ecu.model())
+        self.capture_source.currentIndexChanged.connect(self.ecu.setCurrentIndex); self.ecu.currentIndexChanged.connect(self.capture_source.setCurrentIndex)
+        self.capture_preset=self.button('Prepare recommended preset',self.prepare_capture)
         self.capture_start=self.button('Start Drive Capture',self.start_capture,'primary')
         self.capture_bundle=self.button('Export Research Bundle',lambda:self.bundle_export(latest=True))
-        for w in (QLabel('ECU:'),self.capture_source,self.capture_preset,self.capture_start,
-                  self.button('Finish session',self.finish_session),self.capture_bundle): controls.addWidget(w)
+        for w in (QLabel('ECU'),self.capture_source,self.capture_preset,self.capture_start,self.button('Finish session',self.finish_session),self.capture_bundle): controls.addWidget(w)
         layout.addLayout(controls)
-        hint=QLabel('The preset prepares choices only; Start Drive Capture sends requests. Checkbox edits take effect when Start Drive Capture is pressed again. Discovery is never repeated automatically. A passenger should operate this research UI; prepare before driving.')
-        hint.setWordWrap(True); layout.addWidget(hint)
-        self.capture_status=QLabel('Complete standard discovery before preparing a drive preset.'); self.capture_status.setWordWrap(True); layout.addWidget(self.capture_status)
-        split=QSplitter()
-        self.capture_list=QListWidget(); self.capture_list.setMaximumWidth(370); split.addWidget(self.capture_list)
+        self.capture_status=caption('Complete standard discovery before preparing a drive preset.'); layout.addWidget(self.capture_status)
+        self.capture_summary=caption('Capture not started'); layout.addWidget(self.capture_summary)
+        self.capture_sections=QTabWidget(); layout.addWidget(self.capture_sections,1)
+        monitor=QWidget(); m=QVBoxLayout(monitor); m.setContentsMargins(0,8,0,0)
         self.capture_table=table(['Measurement','Value','Units','State / evidence','Observed mean interval','Age / maximum gap','Weight'])
         self.capture_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.capture_table.horizontalHeader().setStretchLastSection(False)
-        for col,width in enumerate([230,85,55,340,155,170,70]): self.capture_table.setColumnWidth(col,width)
-        split.setMinimumHeight(220)
-        split.addWidget(self.capture_table); split.setStretchFactor(1,1); layout.addWidget(split,1)
-        self.capture_focus=QCheckBox('Focused dashboard (at most seven readings)')
-        layout.addWidget(self.capture_focus)
-        raw_row=QHBoxLayout()
+        for col,width in enumerate([220,130,55,430,145,160,65]): self.capture_table.setColumnWidth(col,width)
+        self.capture_table.setMinimumHeight(220); m.addWidget(self.capture_table,1)
+        self.capture_focus=QCheckBox('Focused dashboard · at most seven readings'); m.addWidget(self.capture_focus)
+        self.focus_dashboard.toggled.connect(self.capture_focus.setChecked); self.capture_focus.toggled.connect(self.focus_dashboard.setChecked)
+        self.capture_focus.toggled.connect(self.update_capture)
+        self.capture_counter_note=caption(''); m.addWidget(self.capture_counter_note); self.capture_sections.addTab(monitor,'Capture monitor')
+        configure=QWidget(); c=QVBoxLayout(configure)
+        c.addWidget(caption('The preset sends nothing. Checkbox edits apply only after Start Drive Capture. NOx is an unchecked manual option.'))
+        self.capture_list=QListWidget(); self.capture_list.setMinimumHeight(140); c.addWidget(self.capture_list,1)
+        self.capture_list.itemChanged.connect(self.update_capture)
         self.capture_raw_checks={}
         for pid in sorted(RAW_ONLY_PIDS):
-            check=QCheckBox(f'Opt in 01{pid:02X} RAW ONLY · numeric output disabled · weight 1')
-            check.setEnabled(False); check.stateChanged.connect(self.update_capture)
-            self.capture_raw_checks[pid]=check; raw_row.addWidget(check)
-        layout.addLayout(raw_row)
+            check=QCheckBox(f'Opt in 01{pid:02X} RAW ONLY · no numeric interpretation · weight 1')
+            check.setEnabled(False); check.stateChanged.connect(self.update_capture); self.capture_raw_checks[pid]=check; c.addWidget(check)
         self.capture_raw_detail=QTextEdit(); self.capture_raw_detail.setReadOnly(True)
-        self.capture_counter_note=QLabel()
-        self.capture_counter_note.setWordWrap(True); layout.addWidget(self.capture_counter_note)
-        marker_row=QHBoxLayout()
+        self.capture_omissions=QTextEdit(); self.capture_omissions.setReadOnly(True)
+        evidence_tabs=QTabWidget(); evidence_tabs.setMinimumHeight(150); evidence_tabs.addTab(self.capture_raw_detail,'Raw evidence'); evidence_tabs.addTab(self.capture_omissions,'Numeric omissions'); c.addWidget(evidence_tabs,1)
+        self.capture_sections.addTab(configure,'Configure & evidence')
+        journey=QWidget(); j=QVBoxLayout(journey); marker_row=QHBoxLayout()
         self.journey_start=self.button('Journey Start',lambda:self.send('marker',event='Journey Start'))
         self.journey_end=self.button('Journey End',lambda:self.send('marker',event='Journey End'))
-        self.marker_note=QLineEdit(); self.marker_note.setMaxLength(512); self.marker_note.setPlaceholderText('Passenger note; local original only, text redacted in Research Bundle')
-        self.note_button=self.button('Note',self.add_note)
+        self.marker_note=QLineEdit(); self.marker_note.setMaxLength(512); self.marker_note.setPlaceholderText('Passenger note · local original only; bundle redacts text')
+        self.note_button=self.button('Add note',self.add_note)
         for w in (self.journey_start,self.journey_end,self.marker_note,self.note_button): marker_row.addWidget(w)
-        layout.addLayout(marker_row)
-        self.marker_table=table(['Marker UTC','Event','Note / evidence']); self.marker_table.setMaximumHeight(80)
-        layout.addWidget(self.marker_table)
-        self.capture_omissions=QTextEdit(); self.capture_omissions.setReadOnly(True)
-        evidence_tabs=QTabWidget(); evidence_tabs.setMaximumHeight(130)
-        evidence_tabs.addTab(self.capture_raw_detail,'Raw evidence')
-        evidence_tabs.addTab(self.capture_omissions,'Numeric omissions')
-        layout.addWidget(evidence_tabs)
+        j.addLayout(marker_row); self.marker_table=table(['Marker UTC','Event','Note / evidence']); j.addWidget(self.marker_table,1)
+        j.addWidget(caption('Markers never send ECU requests. Page changes never finish recording. Finish session stops polling and closes recording; Disconnect also finalizes an open recording.'))
+        self.capture_sections.addTab(journey,'Journey markers')
         self.tabs.addTab(tab,'Drive Capture'); self.update_capture()
+
+    def show_capture_step(self, stage):
+        hints = ('Choose Simulation or LIVE in connection settings, then connect explicitly.',
+                 'Start recording before connecting to retain initialization. Finish recording closes the journal; it does not stop polling.',
+                 'Use Discovery to scan standard PIDs explicitly, while stationary, for this ECU.',
+                 'Prepare a preset, review eligible choices and unchecked NOx / RAW-only options. Preparing sends nothing.',
+                 'Start Drive Capture explicitly. Monitor the actual source, PID count, intervals and errors.',
+                 'Finish session stops polling and finishes recording. Disconnect is a separate connection action.',
+                 'Export a closed session as a Research Bundle. Files remain local and private.')
+        self.capture_step_help.setText(hints[stage])
+        if stage==0: self.connection_panel.show()
+        elif stage==1:
+            self.tabs.setCurrentIndex(0); self.record_button.setFocus()
+        elif stage==2: self.tabs.setCurrentIndex(5)
+        elif stage==3: self.capture_sections.setCurrentIndex(1)
+        elif stage==4: self.capture_sections.setCurrentIndex(0)
+        elif stage==6: self.tabs.setCurrentIndex(1)
 
     def prepare_capture(self):
         ecu=self.source_key(); prepared=self.discovery_prepared and ecu==self.discovery_target and self.connected and not self.requires_reconnect
@@ -685,6 +797,12 @@ class MainWindow(QMainWindow):
             gap=f'age {max(0,age):.2f} s' if age is not None else '—'
             if gaps: gap+=f' / max {max(gaps):.2f} s'
             update_row(self.capture_table,row,[field.get('name',sensor.name),value,unit,state,interval,gap,self.capture_weights.get(pid,'—')])
+        monitor_errors=max(0,self.error_count-getattr(self,'capture_error_baseline',self.error_count))
+        self.capture_summary.setText(f'Capture: {"ACTIVE" if self.capture_active and self.polling_active else "not active"} · ECU {self.source_key() or "—"} · {len(self.capture_weights) if self.capture_active else len(self.capture_selected())+len(self.raw_selected())} PIDs · Polling {"active" if self.polling_active else "stopped"} · Recording {"active" if self.recording_id else "off"} · Monitoring errors {monitor_errors} · Total errors {self.error_count}')
+        self.capture_preset.setToolTip('Complete Discovery for this ECU before preparing choices; no commands are sent by this button')
+        self.capture_start.setToolTip('Prepare eligible choices for this ECU, then explicitly start acquisition')
+        stage = 4 if self.capture_active else 3 if self.discovery_prepared else 2 if self.connected and self.recording_id else 1 if self.connected else 0
+        self.capture_stepper.show_stage(stage)
         raw_details=[]
         for pid in sorted(RAW_ONLY_PIDS):
             sample=self.discovery_observations.get((self.source_key(),pid),{})
@@ -693,7 +811,8 @@ class MainWindow(QMainWindow):
         self.capture_raw_detail.setPlainText(json.dumps(raw_details,ensure_ascii=False,indent=2) if raw_details else 'RAW evidence appears after discovery; no numerical interpretation of an unknown layout.')
 
     def build_discovery(self):
-        tab = QWidget(); layout = QVBoxLayout(tab)
+        tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0)
+        page_heading(layout, 'Standard PID discovery', 'Explicit scans for the selected ECU. Support and a positive reply are separate evidence.')
         message = QLabel('Standard Mode 01 only. Start discovery explicitly for the selected ECU. Unsupported/unknown PIDs are never probed. Samples remain vehicle-unverified; OEM candidates are offline only.')
         message.setWordWrap(True); layout.addWidget(message)
         source_row = QHBoxLayout(); source_row.addWidget(QLabel('ECU:'))
@@ -701,7 +820,7 @@ class MainWindow(QMainWindow):
         self.discovery_ecu.currentIndexChanged.connect(self.ecu.setCurrentIndex)
         self.ecu.currentIndexChanged.connect(self.discovery_ecu.setCurrentIndex)
         source_row.addWidget(self.discovery_ecu,1)
-        self.discovery_filter = QComboBox(); self.discovery_filter.addItems(['All systems','Engine','DPF','Exhaust','SCR/AdBlue'])
+        self.discovery_filter = QComboBox(); self.discovery_filter.addItems(['All systems','Engine','DPF','Exhaust','SCR/AdBlue','NOx'])
         self.discovery_filter.currentTextChanged.connect(self.update_discovery)
         source_row.addWidget(self.discovery_filter); layout.addLayout(source_row)
         row = QHBoxLayout()
@@ -711,14 +830,15 @@ class MainWindow(QMainWindow):
                   self.button('Export discovery report…',self.export_discovery)): row.addWidget(w)
         layout.addLayout(row)
         self.discovery_status = QLabel(); self.discovery_status.setWordWrap(True); layout.addWidget(self.discovery_status)
-        self.discovery_status.setMinimumHeight(64)
+        self.discovery_status.setMinimumHeight(32)
         self.discovery_table = table(['System','Parameter / request','ECU','PID support','Availability','Evidence','Verification','Latest sample (UTC)'])
         self.discovery_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         for col,width in enumerate([100,290,100,110,155,160,175,200]): self.discovery_table.setColumnWidth(col,width)
         self.discovery_table.itemSelectionChanged.connect(self.discovery_details)
         layout.addWidget(self.discovery_table,1)
-        self.discovery_detail = QTextEdit(); self.discovery_detail.setReadOnly(True); self.discovery_detail.setMinimumHeight(160)
-        layout.addWidget(self.discovery_detail,1)
+        self.discovery_inspect=QCheckBox('Inspect selected parameter · original bytes and exact evidence'); layout.addWidget(self.discovery_inspect)
+        self.discovery_detail = QTextEdit(); self.discovery_detail.setReadOnly(True); self.discovery_detail.setMinimumHeight(130); self.discovery_detail.setMaximumHeight(190)
+        self.discovery_inspect.toggled.connect(self.discovery_detail.setVisible); layout.addWidget(self.discovery_detail); self.discovery_detail.hide()
         self.tabs.addTab(tab,'Discovery')
         self.update_discovery()
 
@@ -727,7 +847,7 @@ class MainWindow(QMainWindow):
                                                 mode=self.mode,context_id=self.context_id)
         system = self.discovery_filter.currentText()
         self.discovery_rows = [e for e in self.discovery_data['standard']+self.discovery_data['manufacturer_candidates']
-                               if system == 'All systems' or e['system']==system]
+                               if system == 'All systems' or e['system']==system or (system=='NOx' and e.get('pid')=='83')]
         self.discovery_table.setRowCount(len(self.discovery_rows))
         for row,e in enumerate(self.discovery_rows):
             sample = e.get('sample',{})
@@ -737,11 +857,18 @@ class MainWindow(QMainWindow):
                        e['verification']+' / vehicle UNVERIFIED',sample.get('timestamp','—')])
         counts = {s:sum(e.get('availability')==s for e in self.discovery_data['standard'])
                   for s in ('AVAILABLE','UNSUPPORTED','UNKNOWN','UNVERIFIED','NO_SUPPORTED_FIELDS','INVALID / UNVERIFIED')}
-        self.discovery_status.setText(f'ECU selected: {self.source_key() or "—"} | {self.mode} | {self.discovery_reason} | '+
-                                      ', '.join(f'{s}: {n}' for s,n in counts.items()))
+        selected=[e for e in self.discovery_data['standard'] if e.get('ecu')==self.source_key()]
+        supported=sum(e['support']=='SUPPORTED' for e in selected); unsupported=sum(e['support']=='UNSUPPORTED' for e in selected)
+        unknown=sum(e['support']=='UNKNOWN' for e in selected)
+        positive=sum(bool(e.get('sample')) and not e.get('sample',{}).get('error') for e in selected)
+        unverified=sum('UNVERIFIED' in e.get('availability','') for e in selected)
+        self.discovery_status.setText(f'ECU {self.source_key() or "—"} · {"Discovery running" if self.discovery_active else self.discovery_reason}\nSupported {supported} · Unsupported {unsupported} · Unknown {unknown} · Observed samples {positive} · Unverified layouts {unverified}')
+        self.discovery_status.setToolTip(', '.join(f'{s}: {n}' for s,n in counts.items()))
         allowed = self.connected and self.mode != 'REPLAY' and not self.requires_reconnect and not self.discovery_active
         self.discovery_start.setEnabled(allowed)
         self.discovery_monitor.setEnabled(allowed and self.discovery_prepared and self.source_key()==self.discovery_target)
+        self.discovery_start.setToolTip('Connect explicitly; hardware failure requires reconnect' if not allowed else 'Read standard supported PIDs only; selected ECU')
+        self.discovery_monitor.setToolTip('Complete discovery for this ECU first; unknown or unsupported PIDs cannot be monitored')
         self.discovery_details()
 
     def discovery_details(self):
@@ -821,6 +948,7 @@ class MainWindow(QMainWindow):
         if self.explorer.rowCount() == 0:
             for s in self.registry.values():
                 add_row(self.explorer, [s.name, f"01{s.pid:02X}", f'01 / {s.metadata["positive_response"]}', "—", s.metadata["layout"], s.metadata["formula"], s.unit, "—", s.metadata["verification"], "—", "—", "Unavailable"])
+            self.explorer.selectRow(0)
         for row, sensor in enumerate(self.registry.values()):
             reading = self.readings.get((source, sensor.pid))
             verification = "UNSUPPORTED" if source in self.support and support_state(self.support[source], self.support_pages.get(source, set()), sensor.pid) == "unsupported" else sensor.metadata["verification"]
@@ -838,7 +966,7 @@ class MainWindow(QMainWindow):
             if kind == "notice": self.notice(value)
             elif kind == "context":
                 self.context_id, self.mode = value["id"], value["mode"]
-                self.readings.clear(); self.history.clear(); self.sensor_errors.clear()
+                self.readings.clear(); self.history.clear(); self.sensor_errors.clear(); self.signal_values.clear()
                 self.support.clear(); self.support_pages.clear()
                 self.discovery_observations.clear(); self.discovery_active = False
                 self.discovery_prepared = False; self.discovery_target = None
@@ -865,6 +993,7 @@ class MainWindow(QMainWindow):
                 self.discovery_prepared = value.get('prepared',False); self.discovery_target = value.get('target')
             elif kind == 'capture':
                 if value.get('context_id')!=self.context_id: continue
+                if value['active'] and not self.capture_active: self.capture_error_baseline=self.error_count
                 self.capture_active=value['active']; self.capture_weights=value['weights']; self.capture_ecu=value['ecu']
                 self.capture_raw_pids=set(value.get('raw_pids',[]))
                 self.capture_status.setText(value['reason'])
@@ -876,6 +1005,7 @@ class MainWindow(QMainWindow):
             elif kind == "connection":
                 self.mode = value["mode"]
                 self.connected = value["ecu"] == "Connected"
+                if self.connected: self.connection_panel.hide()
                 self.status.setText(f'Adapter: {value["adapter"]}   |   ECU: {value["ecu"]}   |   Protocol: {value["protocol"]}')
                 self.connect_button.setEnabled(value["adapter"] == "Disconnected" or value["ecu"] in {"Connected", "No verified ECU response", "Replay paused"})
             elif kind == "support":
@@ -907,6 +1037,7 @@ class MainWindow(QMainWindow):
                     self.readings[key] = dict(reading, received_at=time.monotonic() if replay else sent_at, invalid=False)
                     self.sensor_errors.pop(key, None)
                     self.history.setdefault(key, deque(maxlen=20)).append(sent_at)
+                    self.signal_values.setdefault((source,reading['pid'],reading['mode'],reading.get('source_kind','UNKNOWN')),deque(maxlen=240)).append((sent_at,reading['value']))
                     self.discovery_observations[key] = {'ecu':reading['ecu'],'pid':reading['pid'],
                         'fields':[dict(state='AVAILABLE',name=self.registry[reading['pid']].name,value=reading['value'],unit=self.registry[reading['pid']].unit)],
                         'timestamp':reading['timestamp'],'source_kind':reading.get('source_kind','UNKNOWN'),'replay':replay}
@@ -953,7 +1084,91 @@ class MainWindow(QMainWindow):
         self.stats.setText(f'Recording: {self.recording_id[:12] if self.recording_id else "off"}  {duration:.1f}s   |   Requests: {self.request_count}   |   Errors: {self.error_count}   |   Dropped UI previews: {self.worker.dropped}')
         self.record_button.setEnabled(not self.recording_id)
         self.record_stop_button.setEnabled(bool(self.recording_id))
-        self.start_button.setEnabled(self.connected and not self.polling_active and not self.requires_reconnect)
+        self.refresh_presentation()
+
+    def arrange_cards(self):
+        cols = 3 if self.width() < 1600 else 4
+        for i,card in enumerate(self.sensor_cards): self.cards_grid.addWidget(card,i//cols,i%cols)
+
+    def refresh_presentation(self):
+        self.update_connection_controls()
+        self.session_record_button.setEnabled(not self.recording_id)
+        self.session_finish_button.setEnabled(bool(self.recording_id))
+        self.rejection_reason.setVisible(bool(self.rejection_reason.text()))
+        state = 'Connected' if self.connected else 'Connecting' if self.mode=='Connecting' else 'Disconnected'
+        source = 'REPLAY' if self.mode=='REPLAY' else 'SIMULATED' if self.mode=='SIMULATED' else 'LIVE' if self.mode.startswith('LIVE') else self.source.currentText().split(' / ')[0].upper()
+        activity = 'Replay' if self.mode=='REPLAY' else 'Drive Capture' if self.capture_active else 'Discovery' if self.discovery_active else 'Idle'
+        values = {'Source':source,'Connection':state,'ECU':self.source_key() or '—','Polling':'Active' if self.polling_active else 'Stopped','Recording':'Active' if self.recording_id else 'Off','Activity':activity}
+        for name,value in values.items():
+            label=self.status_indicators[name]; label.setText(f'{name}: {value}'); label.setAccessibleName(f'{name}: {value}'); label.setToolTip(self.status.text() if name=='Connection' else label.text())
+        self.filter_raw(); self.filter_explorer(); self.refresh_cards(); self.refresh_signal_chart()
+
+    def refresh_cards(self):
+        if not hasattr(self,'capture_focus'): return
+        rows=[]
+        if self.focus_dashboard.isChecked():
+            for i in range(self.capture_table.rowCount()):
+                cells=[self.capture_table.item(i,c).text() for c in range(self.capture_table.columnCount())]
+                if cells[3].startswith('UNSUPPORTED'): continue
+                rows.append((cells[0],cells[1],cells[2],cells[3],f'ECU {self.source_key() or "—"} · {cells[5]}'))
+            # UI-only replacements come from positive, supported basic readings.
+            # This never selects, schedules or probes a sensor.
+            eligible=[]
+            for i in range(self.dashboard.rowCount()):
+                cells=[self.dashboard.item(i,c).text() for c in range(self.dashboard.columnCount())]
+                if cells[1]=='—' or cells[3].startswith(('Invalid','ECU rejected','Not supported')): continue
+                pid=next(p for p,d in self.registry.items() if d.name==cells[0])
+                if support_state(self.support.get(self.source_key(),set()),self.support_pages.get(self.source_key(),set()),pid)!='supported': continue
+                eligible.append((pid,(cells[0],cells[1],cells[2],cells[3],f'ECU {cells[6]} · {cells[9]} · {cells[7]}')))
+            choice=self.focus_replacement.currentData()
+            options=[(None,'Automatic eligible readings')]+[(pid,entry[0]) for pid,entry in eligible]
+            if [(self.focus_replacement.itemData(i),self.focus_replacement.itemText(i)) for i in range(self.focus_replacement.count())]!=options:
+                self.focus_replacement.blockSignals(True); self.focus_replacement.clear()
+                for pid,name in options: self.focus_replacement.addItem(name,pid)
+                self.focus_replacement.setCurrentIndex(max(0,self.focus_replacement.findData(choice))); self.focus_replacement.blockSignals(False)
+            if choice is not None:
+                replacement=next((entry for pid,entry in eligible if pid==choice),None)
+                if replacement and not any(row[0]==replacement[0] for row in rows): rows=(rows[:6]+[replacement])
+            for _,entry in eligible:
+                if len(rows)>=7: break
+                if not any(row[0]==entry[0] for row in rows): rows.append(entry)
+        else:
+            for pid in (12,13,5,16,11,15):
+                sensor=self.registry.get(pid)
+                if not sensor: continue
+                i=next((r for r in range(self.dashboard.rowCount()) if self.dashboard.item(r,0).text()==sensor.name),None)
+                if i is None: rows.append((sensor.name,'—',sensor.unit,'Not selected',f'ECU {self.source_key() or "—"} · no sample'))
+                else:
+                    cells=[self.dashboard.item(i,c).text() for c in range(self.dashboard.columnCount())]
+                    state={'Unavailable':'No sample yet','Not supported':'Unsupported PID','Support unknown':'Support not observed','Valid':'Current sample'}.get(cells[3],cells[3])
+                    rows.append((cells[0],cells[1],cells[2],state,f'ECU {cells[6]} · {cells[9]} · {cells[7]}'))
+        for i,card in enumerate(self.sensor_cards):
+            card.setVisible(i<len(rows))
+            if i<len(rows): card.present(*rows[i])
+
+    def refresh_signal_chart(self, *args):
+        if not hasattr(self,'signal_chart'): return
+        pid=self.trend_sensor.currentData(); source=self.source_key()
+        reading=self.readings.get((source,pid),{})
+        key=(source,pid,reading.get('mode'),reading.get('source_kind','UNKNOWN'))
+        points=list(self.signal_values.get(key,[])); alternate=self.units.isChecked()
+        signature=(key,tuple(points),alternate)
+        if signature==self._chart_signature: return
+        self._chart_signature=signature; self.signal_chart.removeAllSeries()
+        sensor=self.registry[pid]
+        if len(points)<2:
+            self.signal_chart.setTitle('No trend yet · at least two acquired samples required'); self.trend_note.setText('No interpolation or additional requests')
+        else:
+            series=QScatterSeries(); series.setMarkerSize(5); series.setColor(QColor('#77d5c6'))
+            anchor=points[0][0]; unit=sensor.unit
+            for stamp,value in points:
+                converted,unit=convert(value,sensor.unit,alternate); series.append(stamp-anchor,converted)
+            self.signal_chart.addSeries(series); self.signal_chart.createDefaultAxes()
+            self.signal_chart.axes(Qt.Orientation.Horizontal)[0].setTitleText('Elapsed seconds · current ECU/source context')
+            self.signal_chart.axes(Qt.Orientation.Vertical)[0].setTitleText(unit)
+            self.signal_chart.setTitle(f'{sensor.name} · {reading.get("source_kind","UNKNOWN")} · acquired points')
+            self.trend_note.setText(f'{len(points)} samples · {points[-1][0]-anchor:.1f} s window')
+        style_chart(self.signal_chart)
 
     def closeEvent(self, event):
         self.timer.stop()

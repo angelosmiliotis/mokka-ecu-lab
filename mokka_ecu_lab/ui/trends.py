@@ -2,11 +2,13 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog,QVBoxLayout,QLabel,QComboBox,QTabWidget,QWidget,QTableWidget,QTableWidgetItem
 from PySide6.QtCharts import QChart,QChartView,QScatterSeries
+from .theme import style_chart,style_table,stylesheet
 
 
 class TrendsDialog(QDialog):
     def __init__(self,report,parent=None):
         super().__init__(parent)
+        self.setStyleSheet(stylesheet())
         self.report=report; self.setWindowTitle('Recorded trends · local only'); self.resize(1100,750)
         layout=QVBoxLayout(self)
         label=QLabel(report['limitations']); label.setWordWrap(True); layout.addWidget(label)
@@ -17,6 +19,7 @@ class TrendsDialog(QDialog):
         self.summary=QTableWidget(0,7); self.summary.setHorizontalHeaderLabels(['Field','Unit','Samples','Min','Max','Max gap (s)','Interpretation limit'])
         self.summary.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.summary.horizontalHeader().setStretchLastSection(True)
+        style_table(self.summary)
         layout.addWidget(self.summary,1)
         self.charts=QTabWidget(); layout.addWidget(self.charts,2)
         layout.addWidget(QLabel(f"Invalid rows omitted: {report['ignored_invalid_rows']}. Chart preview: at most 2000 points per field; summaries use all loaded samples."))
@@ -42,5 +45,6 @@ class TrendsDialog(QDialog):
             chart.axes(Qt.Orientation.Horizontal)[0].setTitleText('Elapsed seconds in selected ECU/source group')
             chart.axes(Qt.Orientation.Vertical)[0].setTitleText(item['unit'])
             chart.legend().hide()
+            style_chart(chart)
             view=QChartView(chart); self.charts.addTab(view,item['sensor_id'])
         self.summary.resizeColumnsToContents()
