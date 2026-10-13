@@ -36,10 +36,11 @@ def test_raw_value_is_always_dash_and_becomes_stale_on_stop(window):
     window.discovery_observations['7E8',0x7A]=sample
     window.capture_active=True; window.capture_weights={0x7A:1}; window.capture_ecu='7E8'
     window.update_capture()
-    index=next(i for i in range(window.capture_table.rowCount()) if 'DPF pressures' in window.capture_table.item(i,0).text())
+    index=next(i for i in range(window.capture_table.rowCount()) if window.capture_table.item(i,0).data(Qt.ItemDataRole.UserRole)==0x7A)
     assert window.capture_table.item(index,1).text()=='—'
     assert 'Current raw sample' in window.capture_table.item(index,3).text()
-    assert 'RAW ONLY / DECODER UNVERIFIED' in window.capture_table.item(index,3).text()
+    assert 'RAW ONLY' in window.capture_table.item(index,3).text()
+    assert 'No verified numeric decoder' in window.capture_table.item(index,3).text()
     window.send('stop'); window.update_capture()
     assert 'Stale raw' in window.capture_table.item(index,3).text()
 

@@ -122,6 +122,6 @@ def test_every_page_fits_scaled_desktop_and_has_scroll_access(window,physical,sc
     for index in range(7):
         window.tabs.setCurrentIndex(index); QApplication.processEvents()
         area=window.tabs.widget(index)
-        assert area.widget().width()<=area.viewport().width()+1
+        assert area.widget().width()<=area.viewport().width()+1, (index,area.widget().width(),area.viewport().width())
         assert area.verticalScrollBar().isEnabled()
     assert window.sidebar.compact==(logical[0]<1120)
