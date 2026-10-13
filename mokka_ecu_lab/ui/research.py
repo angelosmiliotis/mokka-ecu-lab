@@ -161,6 +161,8 @@ class ResearchView(QWidget):
             return 'UNAVAILABLE' if c['state']=='UNAVAILABLE' else f"{c['value']:g} {c['unit']} / {c['age_seconds']:.3f}s · cached"
         fill(self.samples,[[s['pid'],s['timestamp'],s['payload_hex'],s['layout_status'],context(s,'rpm'),context(s,'maf'),context(s,'speed')] for s in g['samples']])
         self.evidence_detail.setPlainText(json.dumps(dict(missing=session['missing_evidence']+g['missing_evidence'],
+            capture_coverage=g.get('capture_coverage'),acquisition_quality=session.get('acquisition_quality'),
+            acquisition_receipt=session.get('acquisition_receipt'),
             contradictions=session['contradictions'],transaction_errors=session['transaction_errors'],
             verification_requirements=self.report['verification_requirements'],limitations=self.report['limitations'],
             recorded_decoder_versions=session['recorded_decoder_versions'],current_decoder=self.report['decoder_version'],

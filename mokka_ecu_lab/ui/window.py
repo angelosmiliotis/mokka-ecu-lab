@@ -24,6 +24,7 @@ from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.adapter.scheduling import priority_weights, nominal_interval
 from mokka_ecu_lab.capture import capture_plan, manual_options, DRIVE_WEIGHTS
+from mokka_ecu_lab.auto_capture import PRESETS
 from mokka_ecu_lab.logging.bundle import export_research_bundle
 from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, raw_eligibility
 from mokka_ecu_lab.analysis.trends import load_trends
@@ -81,6 +82,8 @@ class MainWindow(QMainWindow):
         self.capture_ecu = None
         self.capture_history = {}
         self.capture_monitor_errors = 0
+        self.auto_receipt = {}
+        self.auto_rejection_reason=''
         self.warning_history = {}
         self.last_recording_id = None
         self.discovery_reason = 'No discovery started'
@@ -155,7 +158,7 @@ class MainWindow(QMainWindow):
         return b
 
     def send(self, action, **kwargs):
-        if action in {'discover','monitor_discovery','drive_capture'}:
+        if action in {'discover','monitor_discovery','drive_capture','full_auto','retry_auto'}:
             self.user_paused = False
         if action == 'discover': self.polling_active = False
         if action in {"stop", "disconnect", "replay", "shutdown", "connect"}:
@@ -166,7 +169,7 @@ class MainWindow(QMainWindow):
             self.user_paused = False
         try:
             self.worker.submit(action, **kwargs)
-            if action in {'connect','record','record_stop','discover','drive_capture','stop','disconnect','start'}:
+            if action in {'connect','record','record_stop','discover','drive_capture','stop','disconnect','start','full_auto','retry_auto'}:
                 self.pending_actions[action] = self.context_id
             if action == 'disconnect': self.pending_actions.pop('connect', None)
         except Exception as exc: self.notice(str(exc))
@@ -228,7 +231,7 @@ class MainWindow(QMainWindow):
     def update_connection_controls(self):
         live = self.source.currentIndex() == 1
         self.live_config.setVisible(live); self.sim_config.setVisible(not live)
-        changing = self.connected or self.adapter_open or self.mode == 'Connecting' or 'connect' in self.pending_actions
+        changing = self.connected or self.adapter_open or self.mode == 'Connecting' or any(a in self.pending_actions for a in ('connect','full_auto','retry_auto'))
         self.port.setEnabled(live and not changing); self.baud.setEnabled(live and not changing)
         self.scenario.setEnabled(not live and not changing); self.source.setEnabled(not changing)
         self.refresh_port_button.setEnabled(live and not changing)
@@ -248,6 +251,8 @@ class MainWindow(QMainWindow):
 
     def source_selection_changed(self, *args):
         if hasattr(self, 'capture_list') and self.mode!='REPLAY' and not self.connected and not self.adapter_open and 'connect' not in self.pending_actions:
+            self.auto_receipt={}; self._auto_signature=None; self.auto_rejection_reason=''
+            if hasattr(self,'auto_consent'): self.auto_consent.setChecked(False)
             self.mode = 'Disconnected'
             self.accept_transactions = False
             self.readings.clear(); self.signal_values.clear(); self.history.clear(); self.sensor_errors.clear()
@@ -393,6 +398,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(exports)
         self.diagnostic_export = QCheckBox('Include original adapter/port, identification bytes and marker notes in diagnostic JSONL')
         self.diagnostic_export.setToolTip('Private identifying metadata. Redaction is enabled by default. Review before sharing.'); layout.addWidget(self.diagnostic_export)
+        self.private_phase_export=QCheckBox('Include private phase labels in Research Bundle · local only')
+        self.private_phase_export.setToolTip('Default bundle redacts phase labels and notes. This opt-in includes phase labels, uncertainty and provenance; notes remain redacted.'); layout.addWidget(self.private_phase_export)
         layout.addWidget(caption('Files stay on this computer. No automatic uploads. VIN is never queried; adapter metadata is redacted by default.'))
         self.session_info = caption(str(self.root)); layout.addWidget(self.session_info)
         controls = FlowLayout(); self.replay_speed = QComboBox(); self.replay_speed.addItems(["1× original", "2×", "5×", "10×"])
@@ -401,6 +408,7 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.button("Pause replay", lambda: self.send("stop")))
         controls.addWidget(self.button("Step transaction", lambda: self.send("step")))
         controls.addWidget(self.button('Recorded trends…',self.open_trends)); controls.addStretch(); layout.addLayout(controls)
+        layout.addWidget(self.button('Offline Sport / Normal comparison…',self.open_phase_comparison))
         self.tabs.addTab(tab, "Sessions")
 
     def session_selection_changed(self):
@@ -439,6 +447,12 @@ class MainWindow(QMainWindow):
     def current_session(self):
         row = self.session_table.currentRow() if hasattr(self, "session_table") else -1
         return self.sessions[row] if 0 <= row < len(self.sessions) else None
+
+    def open_phase_comparison(self):
+        path,_=QFileDialog.getOpenFileName(self,'Private offline Sport / Normal comparison',str(self.root),'Research Bundle (*.zip)')
+        if path:
+            from .phases import PhaseDialog
+            self.phase_dialog=PhaseDialog(path,self); self.phase_dialog.show()
 
     def replay_session(self):
         s = self.current_session()
@@ -481,7 +495,7 @@ class MainWindow(QMainWindow):
         path,_ = QFileDialog.getSaveFileName(self,'Export Research Bundle',str(self.root/(session['id']+'-research.zip')),'ZIP (*.zip)')
         if path:
             try:
-                export_research_bundle(self.root,session['id'],Path(path))
+                export_research_bundle(self.root,session['id'],Path(path),include_private_phases=self.private_phase_export.isChecked())
                 self.exported_session_id = session['id']; self.bundle_destination = str(Path(path).resolve())
                 self.notice(f'Private Research Bundle saved locally: {self.bundle_destination} · SHA-256 checksums; original journal unchanged.')
                 self.session_info.setText(f'Private diagnostic evidence saved: {self.bundle_destination}')
@@ -693,8 +707,23 @@ class MainWindow(QMainWindow):
     def build_capture(self):
         tab=QWidget(); layout=QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0); layout.setSpacing(8)
         page_heading(layout, 'Drive capture', 'Prepare while stationary. During a journey, use passive monitoring; a passenger operates the laptop.')
+        auto=QFrame(); auto.setObjectName('panel'); a=QVBoxLayout(auto)
+        heading=QLabel('Full Auto Research Drive'); heading.setObjectName('nextActionTitle'); a.addWidget(heading)
+        a.addWidget(caption('One deliberate action: record → connect → safe Discovery → all eligible sensors → RAW proof. Prepare while parked.'))
+        row=FlowLayout(); self.auto_preset=QComboBox(); self.auto_preset.addItems(PRESETS)
+        self.auto_start=self.button('Start Full Auto Research Drive',self.start_full_auto,'primary')
+        self.auto_retry=self.button('Retry Capture Setup',self.retry_full_auto)
+        for w in (self.auto_preset,self.auto_start,self.auto_retry): row.addWidget(w)
+        a.addLayout(row)
+        self.auto_consent=QCheckBox('I am parked: allow all eligible standard sensors + RAW-only evidence for this preset')
+        self.auto_consent.setToolTip('Single consent for this run, including eligible 017A / 0188 RAW. Existing read-only allowlist; maximum 4 total requests/s; no numeric formula for unverified RAW layouts.')
+        self.auto_consent.toggled.connect(self.update_capture); a.addWidget(self.auto_consent)
+        self.auto_status=caption('Select Simulation or LIVE explicitly. Give preset consent, then Start. No requests on page visits.')
+        a.addWidget(self.auto_status)
+        self.auto_dpf=QLabel('017A RAW: NOT READY · no worker schedule or stored samples'); self.auto_dpf.setObjectName('sourceIdentity'); self.auto_dpf.setWordWrap(True); a.addWidget(self.auto_dpf)
+        layout.addWidget(auto)
         self.capture_stepper = CaptureStepper(self.show_capture_step); layout.addWidget(self.capture_stepper)
-        self.capture_step_help = caption('Record before connecting to preserve initialization evidence. Each action starts only when you press its button.'); layout.addWidget(self.capture_step_help)
+        self.capture_step_help = caption('Full Auto above runs the acknowledged sequence. Manual / advanced actions below start only when you press their buttons.'); layout.addWidget(self.capture_step_help)
         next_panel=QFrame(); next_panel.setObjectName('panel'); next_row=QHBoxLayout(next_panel)
         next_text=QVBoxLayout(); title=QLabel('Next recommended action'); title.setObjectName('nextActionTitle'); next_text.addWidget(title)
         self.capture_next_help=caption('Select a source and connect explicitly.'); next_text.addWidget(self.capture_next_help)
@@ -741,16 +770,85 @@ class MainWindow(QMainWindow):
         self.capture_omissions=QTextEdit(); self.capture_omissions.setReadOnly(True)
         self.capture_evidence_tabs=QTabWidget(); self.capture_evidence_tabs.setMinimumHeight(150); self.capture_evidence_tabs.addTab(self.capture_raw_detail,'Raw evidence'); self.capture_evidence_tabs.addTab(self.capture_omissions,'Numeric omissions'); c.addWidget(self.capture_evidence_tabs,1)
         self.capture_sections.addTab(configure,'Configure & evidence')
-        journey=QWidget(); j=QVBoxLayout(journey); marker_row=QHBoxLayout()
+        journey=QWidget(); j=QVBoxLayout(journey); marker_row=FlowLayout()
         self.journey_start=self.button('Journey Start',lambda:self.send('marker',event='Journey Start'))
         self.journey_end=self.button('Journey End',lambda:self.send('marker',event='Journey End'))
         self.marker_note=QLineEdit(); self.marker_note.setMaxLength(512); self.marker_note.setPlaceholderText('Passenger note · local original only; bundle redacts text')
         self.note_button=self.button('Add note',self.add_note)
         for w in (self.journey_start,self.journey_end,self.marker_note,self.note_button): marker_row.addWidget(w)
         j.addLayout(marker_row); self.marker_table=table(['Marker UTC','Event','Note / evidence']); j.addWidget(self.marker_table,1)
+        phase_row=FlowLayout(); self.journey_phase=QComboBox(); self.journey_phase.addItems(('Normal','Sport on','Sport off','City','Open road'))
+        self.journey_uncertainty=QSpinBox(); self.journey_uncertainty.setRange(0,3600); self.journey_uncertainty.setValue(30); self.journey_uncertainty.setSuffix(' s uncertainty ±')
+        self.phase_note_button=self.button('Add USER_REPORTED phase',lambda:self.send('marker',event='Phase',phase=self.journey_phase.currentText(),uncertainty_seconds=self.journey_uncertainty.value()))
+        for w in (self.journey_phase,self.journey_uncertainty,self.phase_note_button): phase_row.addWidget(w)
+        j.addLayout(phase_row); j.addWidget(caption('User phases are private notes, never ECU-confirmed. Add only while parked or by a passenger; edit approximate time offline in Sessions.'))
         j.addWidget(caption('Markers never send ECU requests. Page changes never finish recording. Finish session stops polling and closes recording; Disconnect also finalizes an open recording.'))
         self.capture_sections.addTab(journey,'Journey markers')
+        matrix=QWidget(); ml=QVBoxLayout(matrix)
+        ml.addWidget(caption('Current ECU only. All eligible known allowlisted PIDs; bitmap pages are metadata. Estimated intervals may increase with adapter and disk delays.'))
+        self.auto_matrix=table(['Group / measurement / PID','ECU','Bitmap support','Positive / decoder','Representation / reason','Worker scheduled / weight','Stored positives','Mean / max gap / age (s)'])
+        self.auto_matrix.setMinimumHeight(220); ml.addWidget(self.auto_matrix)
+        self.auto_receipt_detail=QTextEdit(); self.auto_receipt_detail.setReadOnly(True); self.auto_receipt_detail.setMaximumHeight(180); ml.addWidget(self.auto_receipt_detail)
+        self.capture_sections.addTab(matrix,'Auto preflight & coverage')
         self.tabs.addTab(tab,'Drive Capture'); self.capture_view_changed(); self.update_capture()
+
+    def start_full_auto(self):
+        if not self.auto_consent.isChecked(): return self.notice('Give the single preset RAW consent while parked first')
+        self.auto_receipt={}; self.auto_rejection_reason=''; self.auto_consent.setChecked(False)
+        self.accept_transactions=False; self.user_paused=False
+        self.send('full_auto',simulation=self.source.currentIndex()==0,port=self.port.currentText().strip(),
+            baud=int(self.baud.currentText()),scenario=self.scenario.currentText(),
+            preset=self.auto_preset.currentText(),consent=True,reuse=self.connected,
+            ecu=self.source_key() if self.connected else None)
+        if self.connected: self.accept_transactions=True
+        self.capture_sections.setCurrentIndex(3)
+
+    def retry_full_auto(self):
+        self.send('retry_auto',simulation=self.source.currentIndex()==0,ecu=self.source_key(),
+                  port=self.port.currentText().strip(),baud=int(self.baud.currentText()),scenario=self.scenario.currentText())
+
+    def update_auto_capture(self):
+        data=self.auto_receipt; state=data.get('state','NOT_STARTED')
+        pending=any(a in self.pending_actions for a in ('full_auto','retry_auto'))
+        working=state in {'STARTING','RECORDING','CONNECTING','DISCOVERING','CONFIGURED','WAITING_RAW','READY','PARTIAL'} and bool(self.recording_id or pending)
+        self.auto_start.setEnabled(self.auto_consent.isChecked() and not pending and not working and not self.requires_reconnect and self.mode!='REPLAY' and
+                                  (self.connected or not self.adapter_open) and (self.source.currentIndex()==0 or bool(self.port.currentText().strip())))
+        self.auto_preset.setEnabled(not working); self.auto_consent.setEnabled(not working)
+        self.auto_retry.setEnabled(state in {'PARTIAL','STOPPED'} and self.connected and bool(self.recording_id) and self.discovery_prepared and not self.requires_reconnect and not pending)
+        self.auto_start.setToolTip('Explicitly record, connect, discover and start all eligible sensors for '+self.source_identity())
+        self.auto_retry.setToolTip('Parked only: one explicit bounded setup pass on the current healthy connection. No automatic reconnect.')
+        signature=(state,pending,self.capture_active,self.polling_active,len(data.get('transitions',[])),sum(e.get('positive_samples',0) for e in data.get('observed',{}).values()),int(time.monotonic()))
+        if signature==getattr(self,'_auto_signature',None): return
+        self._auto_signature=signature
+        if data:
+            closure=(' · recording CLOSED · adapter '+('OPEN' if data.get('adapter_open') else 'CLOSED')) if data.get('closed_at') else ''
+            self.auto_status.setText(f"{state} · {data.get('reason','')} · ECU {data.get('ecu','awaiting response')} · {len(data.get('effective_schedule',{}))} scheduled PIDs · preset RAW consent acknowledged"+closure)
+            dpf=data['dpf']; outcome=data.get('capture_outcome',{})
+            display_state='RECORDED PROOF · capture inactive' if dpf['recorded_positive_six_byte_frames']>=2 and not(self.capture_active and self.polling_active and self.recording_id) else dpf['state']
+            self.auto_dpf.setText(f"017A RAW: {display_state} · worker scheduled {'YES' if dpf.get('worker_scheduled') and self.capture_active and self.polling_active else 'NO'} · stored six-byte positives {dpf['recorded_positive_six_byte_frames']} / 2\n"+
+                'Bitmap '+dpf.get('bitmap_support','UNKNOWN')+' · '+dpf.get('bitmap_provenance','No current evidence')+' · prior complete reply '+str(dpf.get('discovery_data_length','—'))+' bytes · decoder '+dpf.get('discovery_decoder','UNVERIFIED')+'\n'+dpf.get('reason','')+
+                ('\nLast stored: '+str(dpf.get('last_timestamp'))+' · '+str(dpf.get('last_length'))+' bytes · '+str(dpf.get('last_payload_hex')) if dpf.get('last_timestamp') else '')+
+                ('\nSetup ended: '+outcome.get('reason','') if outcome.get('state')=='ABORTED' else ''))
+            rows=data.get('requested_plan',{}).get('matrix',[]); self.auto_matrix.setRowCount(len(rows))
+            for i,item in enumerate(rows):
+                pid=int(item['pid'],16); sensor=STANDARD_DIESEL.get(pid) or self.registry[pid]
+                units='RAW bytes; no numeric unit' if item['representation']=='RAW ONLY' else ' / '.join(sorted({f.unit for f in sensor.fields})) if pid in STANDARD_DIESEL else sensor.unit
+                group='NOx' if pid==0x83 else 'DPF' if pid in {0x7A,0x7B,0x7C,0x8B} else 'SCR / AdBlue' if pid in {0x85,0x86,0x88} else 'Exhaust' if pid in DISCOVERY_PIDS else 'Engine'
+                schedule=data.get('effective_schedule',{}).get(item['pid'],{}); sample=data.get('observed',{}).get(item['pid'],{})
+                age=(time.monotonic_ns()-sample['last_monotonic_ns'])/1e9 if sample.get('last_monotonic_ns') else None
+                gaps=' / '.join(f'{v:.2f}' if v is not None else '—' for v in [sample.get('mean_interval_seconds'),sample.get('maximum_gap_seconds'),age])
+                update_row(self.auto_matrix,i,[f'{group} · {HUMAN_NAMES.get(pid,sensor.name)} · 01{pid:02X} ({units})',data.get('ecu','—'),
+                    item['support'].upper()+(' · ordered raw bitmap' if item['bitmap_affirmative'] else ' · no affirmative chain'),
+                    f"{'YES' if item['positive_observed'] else 'NO'} / {item['layout']}",item['representation']+(' · automatically included' if item['included'] else ' · omitted')+' · '+item['reason']+(' · '+sample['last_error'] if sample.get('last_error') else ''),
+                    f"{'YES' if schedule and self.capture_active and self.polling_active else 'NO'} / {schedule.get('weight','—')} · estimate {schedule.get('nominal_interval_seconds','—')} s",
+                    sample.get('positive_samples',0),gaps])
+            self.auto_receipt_detail.setPlainText(json.dumps(data,ensure_ascii=False,indent=2))
+        elif pending:
+            self.auto_status.setText('Awaiting worker acknowledgment; no stage completed yet')
+        else:
+            self.auto_status.setText(self.auto_rejection_reason or 'Select Simulation or LIVE explicitly. Give preset consent, then Start. No requests on page visits.')
+            self.auto_dpf.setText('017A RAW: NOT READY · no worker schedule or stored samples in this source selection')
+            self.auto_matrix.setRowCount(0); self.auto_receipt_detail.clear()
 
     def capture_view_changed(self, *args):
         if not hasattr(self,'capture_evidence_tabs'): return
@@ -905,6 +1003,8 @@ class MainWindow(QMainWindow):
 
     def capture_plan_status(self):
         ready=self.connected and self.discovery_prepared and self.source_key()==self.discovery_target and not self.requires_reconnect
+        if ready and self.auto_receipt.get('context_id')==self.context_id and self.auto_receipt.get('ecu')==self.source_key() and self.capture_active and self.auto_receipt.get('worker_schedule_acknowledged_at'):
+            return ready,True,dict(weights=self.capture_weights,raw_pids=list(self.capture_raw_pids),omitted=self.auto_receipt['requested_plan'].get('omitted',[]))
         plan=capture_plan(self.support,self.support_pages,self.discovery_observations,self.source_key(),prepared=ready,
                           selected=self.capture_selected(),raw_selected=self.raw_selected())
         configured=ready and self.source_key()==getattr(self,'capture_plan_ecu',None) and bool(plan['weights'])
@@ -975,10 +1075,13 @@ class MainWindow(QMainWindow):
 
     def update_capture(self):
         if not hasattr(self,'capture_list'): return
+        if hasattr(self,'auto_receipt_detail'): self.update_auto_capture()
         prepared,configured,plan=self.capture_plan_status()
         scanning=self.discovery_active and not self.polling_active
-        self.capture_preset.setEnabled(prepared and not scanning and 'discover' not in self.pending_actions)
-        self.capture_start.setEnabled(configured and not scanning and 'drive_capture' not in self.pending_actions)
+        automatic=self.auto_receipt.get('state') in {'WAITING_RAW','READY','PARTIAL'} and self.capture_active
+        pending_auto=any(a in self.pending_actions for a in ('full_auto','retry_auto'))
+        self.capture_preset.setEnabled(prepared and not scanning and 'discover' not in self.pending_actions and not automatic and not pending_auto)
+        self.capture_start.setEnabled(configured and not scanning and 'drive_capture' not in self.pending_actions and not automatic and not pending_auto)
         closed=self.latest_closed_session()
         self.capture_bundle.setEnabled(not self.recording_id and bool(closed) and 'record_stop' not in self.pending_actions)
         selected=self.current_session()
@@ -1000,9 +1103,9 @@ class MainWindow(QMainWindow):
                  else f'Warning-time counter static across {len(values)} recent samples' if len(set(values))==1
                  else f'Warning-time counter changed across {len(values)} recent samples')
         self.capture_counter_note.setText(counter+'. Counter alone cannot establish a current SCR warning or fault. NOx (0183) is an unchecked manual option. RAW-only provides no numeric DPF pressure or SCR state.')
-        for widget in (self.journey_start,self.journey_end,self.note_button,self.marker_note):
+        for widget in (self.journey_start,self.journey_end,self.note_button,self.marker_note,self.phase_note_button,self.journey_phase,self.journey_uncertainty):
             widget.setEnabled(bool(self.recording_id) and self.mode!='REPLAY')
-        pids=[0x8B,0x7A,0x7C,0x0C,0x0D,0x05,0x85] if self.capture_focus.isChecked() else (list(dict.fromkeys(self.capture_selected()+self.raw_selected())) or list(dict.fromkeys([12,13,5,16]+list(DRIVE_WEIGHTS))))
+        pids=[0x8B,0x7A,0x7C,0x0C,0x0D,0x05,0x85] if self.capture_focus.isChecked() else (list(self.capture_weights) if self.capture_active else list(dict.fromkeys(self.capture_selected()+self.raw_selected())) or list(dict.fromkeys([12,13,5,16]+list(DRIVE_WEIGHTS))))
         if not self.capture_focus.isChecked() and not self.capture_technical.isChecked():
             order=[12,13,5,0x8B,0x7A,0x85,0x83,0x88,0x7C,0x78,0x10]
             pids=[p for p in order if p in pids]+[p for p in pids if p not in order]
@@ -1035,7 +1138,7 @@ class MainWindow(QMainWindow):
             self.capture_table.item(row,3).setToolTip(presentation['detail']+'\n'+state+'\n'+str(sample.get('layout_status','')))
         monitor_errors=self.capture_monitor_errors
         details=f'Capture: {"ACTIVE" if self.capture_active and self.polling_active else "not active"} · ECU {self.source_key() or "—"} · {len(self.capture_weights) if self.capture_active else len(self.capture_selected())+len(self.raw_selected())} PIDs · Polling {"active" if self.polling_active else "stopped"} · Recording {"active" if self.recording_id else "off"} · Monitoring errors {monitor_errors} · Total transaction errors {self.error_count} (includes intentional cancellations)'
-        simple=f'Drive Capture {"running" if self.capture_active and self.polling_active else "not running"} · {len(plan["weights"])} configured PIDs · '+('Discovery complete for this ECU' if prepared else 'Discovery needed for this ECU')
+        simple=f'Drive Capture {"running" if self.capture_active and self.polling_active else "not running"} · {len(self.capture_weights) if self.capture_active else len(plan["weights"])} configured PIDs · '+('Discovery complete for this ECU' if prepared else 'Discovery needed for this ECU')
         if monitor_errors: simple+=f' · {monitor_errors} monitoring errors; inspect technical details'
         self.capture_summary.setText(details if self.capture_technical.isChecked() else simple); self.capture_summary.setToolTip(details)
         self.capture_preset.setToolTip('Prepare choices; no commands sent' if prepared else 'Complete standard Discovery for the selected ECU in this connection; reconnect after failures')
@@ -1207,11 +1310,26 @@ class MainWindow(QMainWindow):
             try: kind, value = self.worker.events.get_nowait()
             except queue.Empty: break
             if kind == "notice": self.notice(value)
+            elif kind == 'auto_reset':
+                if value.get('context_id')==self.context_id: self.auto_receipt={}; self._auto_signature=None
+            elif kind == 'auto_rejected':
+                if value.get('context_id')==self.context_id:
+                    self.pending_actions.pop('full_auto',None); self.pending_actions.pop('retry_auto',None)
+                    self.auto_rejection_reason=value['reason']; self._auto_signature=None
+            elif kind == 'auto_capture':
+                if value.get('context_id')!=self.context_id and value.get('state') not in {'RECORDING','CONNECTING'}: continue
+                self.auto_receipt=value
+                if value.get('state') in {'WAITING_RAW','READY','PARTIAL','ABORTED','FINISHED'}:
+                    self.pending_actions.pop('full_auto',None); self.pending_actions.pop('retry_auto',None)
+                if value.get('state') in {'WAITING_RAW','READY','PARTIAL'}:
+                    self.capture_plan_ecu=value.get('ecu')
+                    if self.ecu.findData(value.get('ecu'))>=0: self.ecu.setCurrentIndex(self.ecu.findData(value.get('ecu')))
             elif kind == "context":
+                if not any(a in self.pending_actions for a in ('full_auto','retry_auto')): self.auto_receipt={}
                 self.context_id, self.mode = value["id"], value["mode"]
                 self.connection_protocol=''
                 self.accept_transactions=True
-                self.pending_actions={a:c for a,c in self.pending_actions.items() if a in {'connect','record'}}
+                self.pending_actions={a:c for a,c in self.pending_actions.items() if a in {'connect','record','full_auto','retry_auto'}}
                 self.exported_session_id=None; self.bundle_destination=None
                 if not self.recording_id: self.last_recording_id=None
                 self.readings.clear(); self.history.clear(); self.sensor_errors.clear(); self.signal_values.clear()
@@ -1257,7 +1375,7 @@ class MainWindow(QMainWindow):
             elif kind == 'marker':
                 if value.get('context_id')!=self.context_id: continue
                 if self.marker_table.rowCount()>=100: self.marker_table.removeRow(0)
-                add_row(self.marker_table,[value['timestamp'],value['event'],
+                add_row(self.marker_table,[value['timestamp'],value['event']+(' · '+value.get('phase','') if value['event']=='Phase' else ''),
                         value.get('note','')+(' · REPLAY / recorded' if value.get('replay') else ' · local marker; no ECU request')])
             elif kind == "connection":
                 self.mode = value["mode"]
