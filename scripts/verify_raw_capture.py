@@ -99,7 +99,7 @@ def tick():
             assert view.chart.series() and view.group.count()>=1
             window.grab().save(str(output/'research-bytes.png'))
             view.evidence_tabs.setCurrentIndex(0)
-            row=next(i for i,r in enumerate(view.matrix_rows) if r['pid']=='85')
+            row=next(i for i in range(view.matrix.rowCount()) if view.matrix.item(i,0).text()=='0185')
             view.matrix.selectRow(row); view.matrix.scrollToItem(view.matrix.item(row,0)); app.processEvents()
             assert view.matrix.item(row,1).text()=='SUPPORTED'
             assert view.matrix.item(row,2).text()=='UNKNOWN'
