@@ -9,7 +9,8 @@ from mokka_ecu_lab.ui.window import MainWindow
 @pytest.fixture
 def window(tmp_path, monkeypatch, qt_app):
     app = qt_app
-    ui = MainWindow(tmp_path)
+    ui = MainWindow(tmp_path,validation=True)
+    ui.session_panel.advanced.setChecked(True)  # Legacy manual presentation tests.
     ui.timer.stop()
     monkeypatch.setattr("mokka_ecu_lab.ui.window.time", SimpleNamespace(monotonic=lambda: 110.))
     yield ui

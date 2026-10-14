@@ -18,7 +18,7 @@ def test_sidebar_keyboard_and_step_navigation_never_acquire(window,monkeypatch):
             assert window.tabs.currentIndex()==index and button.isChecked()
             assert button.accessibleName()
         QTest.keyClick(window,Qt.Key.Key_1,Qt.KeyboardModifier.AltModifier); QApplication.processEvents()
-        assert window.tabs.currentIndex()==0
+        assert window.tabs.currentIndex()==7  # Alt+1 opens the standard Session Dashboard.
         for stage in range(7): window.show_capture_step(stage)
         assert not calls and window.worker.transport is None
 
