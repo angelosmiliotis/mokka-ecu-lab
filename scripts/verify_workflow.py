@@ -15,7 +15,8 @@ from mokka_ecu_lab import __version__
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir',type=Path,required=True)
 args=parser.parse_args(); output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
-app=QApplication([]); ui=MainWindow(output/'synthetic-data'); ui.timer.stop()
+app=QApplication([]); ui=MainWindow(output/'synthetic-data',validation=True); ui.timer.stop()
+ui.session_panel.advanced.setChecked(True)
 ui.resize(1366,768); ui.scenario.setCurrentText('Diesel alternative layouts'); ui.tabs.setCurrentIndex(6); ui.show()
 app.processEvents(); started=time.monotonic(); stage='record'; result={}; baseline={}; session_id=None
 

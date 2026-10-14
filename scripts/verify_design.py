@@ -18,7 +18,8 @@ parser.add_argument('--full-auto',action='store_true',help='Exercise the deliber
 args=parser.parse_args(); output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
 report=analyze_bundles([args.bundle])
 assert all(g['source_kind']=='SIMULATED' for s in report['sessions'] for g in s['groups']), 'Synthetic simulation input only'
-app=QApplication([]); ui=MainWindow(output/'synthetic-data'); ui.research_view.set_report(report)
+app=QApplication([]); ui=MainWindow(output/'synthetic-data',validation=True); ui.research_view.set_report(report)
+ui.session_panel.advanced.setChecked(True)
 ui.scenario.setCurrentText('Diesel alternative layouts'); ui.show()
 if args.full_auto:
     ui.auto_consent.setChecked(True); ui.auto_start.click(); stage='auto'
@@ -33,7 +34,7 @@ def capture_pages():
     for width,height in ((1280,720),(1366,768),(1536,864),(1920,1080)):
         logical=(round(width/args.scale),round(height/args.scale)); ui.resize(*logical); app.processEvents()
         assert (ui.width(),ui.height())==logical, ('Window forced beyond target',logical,ui.size())
-        for index,name in enumerate(('dashboard','sessions','raw-data','sensor-explorer','research','discovery','drive-capture')):
+        for index,name in enumerate(('dashboard','sessions','raw-data','sensor-explorer','research','discovery','drive-capture','session-dashboard')):
             ui.tabs.setCurrentIndex(index)
             if index==4: ui.research_view.tabs.setCurrentIndex(1)
             ui.refresh_presentation(); app.processEvents()
@@ -84,5 +85,5 @@ def tick():
         timer.stop(); ui.close(); raise
 
 timer=QTimer(); timer.timeout.connect(tick); timer.start(100); app.exec()
-assert len(results)==28 and not ui.worker.is_alive()
-print(json.dumps(dict(scale=args.scale,pages=28,private_input_used=False,checks='passed')))
+assert len(results)==32 and not ui.worker.is_alive()
+print(json.dumps(dict(scale=args.scale,pages=len(results),private_input_used=False,checks='passed')))

@@ -17,7 +17,8 @@ parser.add_argument('--output-dir', type=Path, default=root / 'samples')
 options = parser.parse_args()
 output = options.output_dir
 app = QApplication([])
-window = MainWindow(output / 'ui-validation')
+window = MainWindow(output / 'ui-validation',validation=True)
+window.session_panel.advanced.setChecked(True)
 window.scenario.setCurrentText(options.scenario)
 window.show()
 result = {}

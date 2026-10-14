@@ -15,7 +15,8 @@ from mokka_ecu_lab import __version__
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir',type=Path,default=Path('release/v0.2.0-validation'))
 options=parser.parse_args(); output=options.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
-app=QApplication([]); window=MainWindow(output/'data')
+app=QApplication([]); window=MainWindow(output/'data',validation=True)
+window.session_panel.advanced.setChecked(True)
 window.scenario.setCurrentText('Diesel discovery'); window.tabs.setCurrentIndex(5); window.show()
 started=time.monotonic(); stage='connect'; result={}
 window.send('record'); window.connect_adapter()

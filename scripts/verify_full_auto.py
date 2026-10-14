@@ -17,7 +17,8 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir',type=Path,required=True)
 parser.add_argument('--scale',type=float,default=1)
 args=parser.parse_args(); output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
-app=QApplication([]); ui=MainWindow(output/'synthetic-data'); ui.resize(round(1366/args.scale),round(768/args.scale))
+app=QApplication([]); ui=MainWindow(output/'synthetic-data',validation=True); ui.resize(round(1366/args.scale),round(768/args.scale))
+ui.session_panel.advanced.setChecked(True)
 ui.scenario.setCurrentText('Diesel alternative layouts'); ui.tabs.setCurrentIndex(6); ui.show()
 app.processEvents(); result={}; stage='start'; started=time.monotonic(); previous=started; gaps=[]; dialog=None
 assert abs(ui.devicePixelRatioF()-args.scale)<.02
