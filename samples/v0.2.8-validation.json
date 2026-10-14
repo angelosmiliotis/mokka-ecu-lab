@@ -1,0 +1,90 @@
+{
+  "version": "0.2.8",
+  "source": "SIMULATED",
+  "private_input_used": false,
+  "hardware_connected": false,
+  "tests": {
+    "passed": 432,
+    "seconds": 163.29
+  },
+  "compiled_project_modules": 39,
+  "compiled_source_mismatches": 0,
+  "native_geometry_checks": {
+    "session": 48,
+    "all_main_pages": 96,
+    "offline_views": 36,
+    "total": 180
+  },
+  "controlled_qt_pixel_ratios": [
+    1,
+    1.25,
+    1.5
+  ],
+  "physical_resolutions": [
+    [
+      1280,
+      720
+    ],
+    [
+      1366,
+      768
+    ],
+    [
+      1536,
+      864
+    ],
+    [
+      1920,
+      1080
+    ]
+  ],
+  "visual_review": true,
+  "native_primary_actions": [
+    "Connect",
+    "Start Session",
+    "Finish Session"
+  ],
+  "default_preset": "DPF Research Priority",
+  "scheduled_pids": 13,
+  "omitted_unsupported_pids": 9,
+  "native_stored_017a_polling_positives": [
+    11,
+    11,
+    11
+  ],
+  "minimum_actual_wire_send_gap_seconds": 0.25,
+  "monitoring_errors": 0,
+  "automatic_bundle_verified": true,
+  "disconnected_after_export": true,
+  "synthetic_offline_source_executable_json_html_identical": true,
+  "packaged": {
+    "actual_process_exits": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "source": "SIMULATED",
+    "private_input_used": false,
+    "hardware_connected": false,
+    "startup_transactions": 11,
+    "startup_errors": 0,
+    "automatic_scheduled_pids": 21,
+    "stored_017a_raw_frames": 2,
+    "monitoring_errors": 0,
+    "closed_recording": true,
+    "worker_receipt_checksums_verified": true,
+    "standard_primary_actions": [
+      "Connect",
+      "Start Session",
+      "Finish Session"
+    ],
+    "standard_scheduled_pids": 13,
+    "standard_stored_017a_raw_frames": 7,
+    "standard_automatic_bundle_verified": true,
+    "standard_disconnected_after_export": true
+  },
+  "physical_vehicle_validation": "PENDING",
+  "six_byte_017a_numeric_decoder": "UNVERIFIED",
+  "regeneration_soot_ash_inference": "NOT IMPLEMENTED: insufficient verified evidence"
+}
