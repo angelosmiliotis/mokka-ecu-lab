@@ -89,6 +89,10 @@ class ResearchView(QWidget):
         self.evidence_detail=QTextEdit(); self.evidence_detail.setReadOnly(True); self.evidence_tabs.addTab(self.evidence_detail,'Findings & requirements')
         checklist=QTextEdit(); checklist.setReadOnly(True); checklist.setPlainText('OFFLINE PREPARATION ONLY · no commands are sent\n\n'+'\n\n'.join(RECOMMENDATIONS)); self.evidence_tabs.addTab(checklist,'Next recording checklist')
         self.tabs.addTab(evidence_tab,'Offline evidence analyzer'); self.tabs.addTab(hypotheses,'EXPERIMENTAL hypotheses')
+        from mokka_ecu_lab.research.roadmap import research_roadmap
+        roadmap=QTextEdit(); roadmap.setReadOnly(True)
+        roadmap.setPlainText('OFFLINE RESEARCH ONLY · no transmission permission\n\n'+json.dumps(research_roadmap(),ensure_ascii=False,indent=2))
+        self.tabs.addTab(roadmap,'Research roadmap')
         self.refresh_catalog()
 
     def refresh_catalog(self):

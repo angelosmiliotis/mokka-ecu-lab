@@ -70,7 +70,7 @@ class FlowLayout(QLayout):
 
 
 class Sidebar(QWidget):
-    ORDER = ((0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
+    ORDER = ((7, 'Session Dashboard', 'dashboard'), (0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
              (1, 'Sessions', 'sessions'), (3, 'Sensor Explorer', 'explorer'), (2, 'Raw Data', 'raw'),
              (5, 'Discovery', 'discovery'), (4, 'Research', 'research'))
 

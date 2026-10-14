@@ -30,6 +30,8 @@ from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, raw_eligibility
 from mokka_ecu_lab.analysis.trends import load_trends
 from .trends import TrendsDialog
 from .research import ResearchView
+from .session import SessionPanel
+from mokka_ecu_lab.session import CONFLICTS
 from .theme import stylesheet, style_table, style_chart, icon, COLORS
 from .components import Sidebar, SensorCard, CaptureStepper, FlowLayout, caption, page_heading, scroll_page
 from .presentation import StepState, HUMAN_NAMES, source_description, measurement_status
@@ -65,7 +67,7 @@ def update_row(widget, row, values):
         elif item.text() != value: item.setText(value)
 
 class MainWindow(QMainWindow):
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, validation=False):
         super().__init__()
         self.root = root
         self.registry = load_registry()
@@ -108,7 +110,10 @@ class MainWindow(QMainWindow):
         self.priorities = {pid: 3 if pid == 12 else 2 if pid == 5 else 1 for pid in self.registry}
         self.mode = "Disconnected"
         self.analysis_rows, self.analysis_report, self.comparison_summary = [], {}, []
-        self.settings = QSettings("MokkaECULab", "Desktop")
+        if validation:
+            root.mkdir(parents=True,exist_ok=True)
+            self.settings=QSettings(str(root/'validation-settings.ini'),QSettings.Format.IniFormat)
+        else: self.settings = QSettings("MokkaECULab", "Desktop")
         self.setWindowTitle(f"Mokka ECU Lab {__version__} · read-only diagnostics")
         self.resize(1366, 768); self.setMinimumSize(760, 480)
         self.setWindowIcon(icon('research', 48)); self.setStyleSheet(STYLE)
@@ -136,6 +141,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget(); self.tabs.tabBar().hide(); layout.addWidget(self.tabs, 1)
         self.build_dashboard(); self.build_sessions(); self.build_raw(); self.build_explorer(); self.build_research()
         self.build_discovery(); self.build_capture()
+        self.session_panel=SessionPanel(self); self.tabs.addTab(self.session_panel,'Session Dashboard')
         self.ensurePolished()
         for widget in self.findChildren(QWidget): widget.ensurePolished()
         # Keep the established seven page indices/API, with scrollable content.
@@ -143,7 +149,7 @@ class MainWindow(QMainWindow):
         for i in range(self.tabs.count()):
             page = self.tabs.widget(i); title = self.tabs.tabText(i)
             self.tabs.removeTab(i); self.tabs.insertTab(i, scroll_page(page), title)
-        self.tabs.setCurrentIndex(0); self.tabs.blockSignals(False)
+        self.tabs.setCurrentIndex(7); self.tabs.blockSignals(False)
         self.sidebar = Sidebar(self.tabs); body.addWidget(self.sidebar); body.addWidget(workspace, 1); shell.addLayout(body, 1)
         self.statusBar().showMessage("Ready · choose a source and connect explicitly. All evidence stays local.")
         self.statusBar().setSizeGripEnabled(False)
@@ -151,6 +157,10 @@ class MainWindow(QMainWindow):
         self.refresh_presentation()
         self.timer = QTimer(self); self.timer.timeout.connect(self.drain); self.timer.start(100)
         self.refresh_sessions(); self.refresh_ports()
+        saved_port=self.settings.value('session_outgoing_port','')
+        if saved_port: self.port.setCurrentText(str(saved_port))
+        self.source.setCurrentIndex(self.settings.value('session_last_source',0,type=int))
+        self.session_panel.update()
 
     def button(self, label, callback, object_name=""):
         b = QPushButton(label); b.clicked.connect(callback)
@@ -158,6 +168,10 @@ class MainWindow(QMainWindow):
         return b
 
     def send(self, action, **kwargs):
+        if hasattr(self,'session_panel') and action in CONFLICTS-{'session_connect','rate'} and not self.session_panel.advanced.isChecked():
+            self.notice('Manual acquisition is available only in Advanced / Developer. Use Connect → Start Session → Finish Session.'); return
+        if hasattr(self,'session_panel') and (self.session_panel.snapshot.get('active') or 'session_start' in self.pending_actions) and action in CONFLICTS:
+            self.notice('Automatic session owns acquisition; Finish Session first'); return
         if action in {'discover','monitor_discovery','drive_capture','full_auto','retry_auto'}:
             self.user_paused = False
         if action == 'discover': self.polling_active = False
@@ -168,12 +182,14 @@ class MainWindow(QMainWindow):
         elif action == "start":
             self.user_paused = False
         try:
-            self.worker.submit(action, **kwargs)
+            if self.worker.submit(action, **kwargs) is False: return
             if action in {'connect','record','record_stop','discover','drive_capture','stop','disconnect','start','full_auto','retry_auto'}:
                 self.pending_actions[action] = self.context_id
             if action == 'disconnect': self.pending_actions.pop('connect', None)
+            if action.startswith('session_'): self.pending_actions[action]=self.context_id
         except Exception as exc: self.notice(str(exc))
         if hasattr(self, 'capture_next'): self.refresh_presentation(); self.update_capture()
+        if hasattr(self,'session_panel'): self.session_panel.update()
 
     def finish_session(self):
         self.send("stop")
@@ -409,6 +425,8 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.button("Step transaction", lambda: self.send("step")))
         controls.addWidget(self.button('Recorded trends…',self.open_trends)); controls.addStretch(); layout.addLayout(controls)
         layout.addWidget(self.button('Offline Sport / Normal comparison…',self.open_phase_comparison))
+        layout.addWidget(self.button('Offline DPF RAW evolution…',self.open_dpf_evolution))
+        layout.addWidget(self.button('Recover / retry selected session export offline',self.recover_selected_session))
         self.tabs.addTab(tab, "Sessions")
 
     def session_selection_changed(self):
@@ -501,6 +519,16 @@ class MainWindow(QMainWindow):
                 self.session_info.setText(f'Private diagnostic evidence saved: {self.bundle_destination}')
                 self.update_capture()
             except Exception as exc: self.notice(str(exc))
+
+    def open_dpf_evolution(self):
+        from .dpf import DpfDialog
+        paths,_=QFileDialog.getOpenFileNames(self,'Private offline DPF bundles','','ZIP (*.zip)')
+        if paths:
+            self.dpf_dialog=DpfDialog(paths,self); self.dpf_dialog.show()
+
+    def recover_selected_session(self):
+        session=self.current_session()
+        if session: self.send('session_export_retry',session_id=session['id'])
 
     def build_raw(self):
         tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0)
@@ -1310,6 +1338,10 @@ class MainWindow(QMainWindow):
             try: kind, value = self.worker.events.get_nowait()
             except queue.Empty: break
             if kind == "notice": self.notice(value)
+            elif kind=='session_state': self.session_panel.acknowledge(value)
+            elif kind=='session_rejected':
+                self.notice(value)
+                for action in ('session_start','session_finish','session_export_retry'): self.pending_actions.pop(action,None)
             elif kind == 'auto_reset':
                 if value.get('context_id')==self.context_id: self.auto_receipt={}; self._auto_signature=None
             elif kind == 'auto_rejected':
@@ -1479,6 +1511,7 @@ class MainWindow(QMainWindow):
         self.stats.setText(f'Recording: {self.recording_id[:12] if self.recording_id else "off"}  {duration:.1f}s   |   Requests: {self.request_count}   |   Errors: {self.error_count}   |   Dropped UI previews: {self.worker.dropped}')
         self.record_button.setEnabled(not self.recording_id)
         self.record_stop_button.setEnabled(bool(self.recording_id))
+        self.session_panel.update()
         self.refresh_presentation()
 
     def arrange_cards(self):
@@ -1504,6 +1537,7 @@ class MainWindow(QMainWindow):
         for name,value in values.items():
             label=self.status_indicators[name]; label.setText(f'{name}: {value}'); label.setAccessibleName(f'{name}: {value}'); label.setToolTip(self.status.text() if name=='Connection' else label.text())
         self.filter_raw(); self.filter_explorer(); self.refresh_cards(); self.refresh_signal_chart()
+        if hasattr(self,'session_panel'): self.session_panel.update()
 
     def refresh_cards(self):
         if not hasattr(self,'capture_focus'): return
