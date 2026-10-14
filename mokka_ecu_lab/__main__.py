@@ -7,6 +7,9 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MokkaECULab" / "data")
     parser.add_argument("--smoke-test", action="store_true", help="Offline UI test; never connects to hardware")
     parser.add_argument('--full-auto-smoke-test',action='store_true',help='Explicit synthetic Windows GUI Full Auto validation; never hardware')
+    parser.add_argument('--session-smoke-test',action='store_true',help='Synthetic Connect → Start Session → Finish Session GUI validation; never hardware')
+    parser.add_argument('--dpf-bundles',nargs='+',type=Path,help='Private offline DPF RAW evolution; starts no GUI or transport')
+    parser.add_argument('--dpf-output',type=Path,help='Fresh private DPF HTML / JSON report path')
     parser.add_argument('--analyze-bundles',nargs='+',type=Path,help='Offline local Research Bundle analysis; starts no GUI or transport')
     parser.add_argument('--research-output',type=Path,help='Separate private JSON analysis destination')
     parser.add_argument('--research-html',type=Path,help='Optional self-contained private HTML report; no network resources')
@@ -15,6 +18,16 @@ def main():
     parser.add_argument('--phase-annotations',type=Path,help='Private USER_REPORTED annotation sidecar')
     parser.add_argument('--phase-output',type=Path,help='Fresh private HTML / JSON comparison base path')
     args = parser.parse_args()
+    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles))>1:
+        parser.error('Choose one validation / offline analysis mode')
+    if (args.smoke_test or args.full_auto_smoke_test or args.session_smoke_test) and args.data_dir.exists():
+        parser.error('Synthetic validation requires a fresh --data-dir; existing user data is preserved')
+    if args.dpf_bundles:
+        if not args.dpf_output: parser.error('--dpf-output is required with --dpf-bundles')
+        from mokka_ecu_lab.analysis.dpf import analyze_dpf,export_dpf_report
+        export_dpf_report(analyze_dpf(args.dpf_bundles),args.dpf_output,args.dpf_bundles)
+        return 0
+    if args.dpf_output: parser.error('--dpf-output requires --dpf-bundles')
     if args.full_auto_smoke_test and (args.smoke_test or args.analyze_bundles or args.compare_phases):
         parser.error('Choose one validation / offline analysis mode')
     if args.compare_phases:
@@ -45,7 +58,10 @@ def main():
     from mokka_ecu_lab.ui.window import MainWindow
     app = QApplication([])
     app.setApplicationName("Mokka ECU Lab")
-    window = MainWindow(args.data_dir); window.show()
+    window = MainWindow(args.data_dir,validation=bool(args.smoke_test or args.full_auto_smoke_test or args.session_smoke_test)); window.show()
+    if args.session_smoke_test:
+        from mokka_ecu_lab.ui.session_validation import install_session_validation
+        session_timer,session_cleanup=install_session_validation(window,app,args.data_dir)
     if args.full_auto_smoke_test:
         import json,time
         from mokka_ecu_lab.logging.bundle import export_research_bundle
@@ -53,6 +69,7 @@ def main():
         if output.exists() or bundle.exists(): parser.error('Use a fresh data directory for Full Auto validation')
         app.setQuitOnLastWindowClosed(False)
         window.source.setCurrentIndex(0); window.scenario.setCurrentText('Diesel alternative layouts')
+        window.session_panel.advanced.setChecked(True)
         window.tabs.setCurrentIndex(6); started=time.monotonic(); smoke_state={'stage':'start'}
         def full_auto_tick():
             window.drain(); now=time.monotonic()
@@ -83,11 +100,13 @@ def main():
                 smoke_timer.stop(); window.close(); app.exit(1)
         smoke_timer=QTimer(); smoke_timer.timeout.connect(full_auto_tick); smoke_timer.start(50)
     if args.smoke_test:
+        window.source.setCurrentIndex(0); window.scenario.setCurrentText('Normal idle'); window.session_panel.advanced.setChecked(True)
         QTimer.singleShot(100, window.connect_adapter)  # Default source is explicitly simulation.
         QTimer.singleShot(3500, lambda: window.send("record"))
         QTimer.singleShot(6500, lambda: window.send("record_stop"))
         QTimer.singleShot(7200, window.close)
     result=app.exec()
+    if args.session_smoke_test: session_cleanup()
     if args.full_auto_smoke_test:
         # The recurring validation callback retains the window in a closure.
         # Destroy its widgets while QApplication still exists, rather than

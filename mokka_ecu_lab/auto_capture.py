@@ -130,6 +130,13 @@ class AcquisitionReceipt:
             return
         entry['positive_samples'] += 1
         entry['decoded_samples'] += any(r.get('ecu') == ecu for r in readings)
+        fields=entry.setdefault('fields',{})
+        for reading in readings:
+            if reading.get('ecu')!=ecu: continue
+            sid=reading['sensor_id']; previous_field=fields.get(sid,{})
+            fields[sid]=dict(value=reading['value'],unit=reading['unit'],timestamp=reading['timestamp'],
+                monotonic_ns=reading['monotonic_ns'],source_kind=reading['source_kind'],
+                verification=reading['verification'],samples=previous_field.get('samples',0)+1)
         raw = next((s for s in record.get('raw_samples', [])
                     if s.get('ecu') == ecu and s.get('framing_valid') and s.get('raw_only')), None)
         entry['raw_only_samples'] += bool(raw)
