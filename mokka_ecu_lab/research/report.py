@@ -11,11 +11,11 @@ from mokka_ecu_lab.protocols import BITMAP_PIDS
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 
 RECOMMENDATIONS=[
-    'Start recording before Connect; complete Discovery while stationary and choose the ECU actually observed.',
-    'While parked, choose Full Auto Research Drive and give one preset RAW consent. All eligible existing standard PIDs, including NOx and eligible RAW targets, are selected automatically. Manual choices remain available.',
+    'While parked, Connect to the configured source and positively responding ECU. Connection alone is not a recording.',
+    'Press Start Session once: recording precedes fresh session Discovery and every eligible existing standard PID/RAW target is automatically selected with DPF Priority. No manual Recording, Discovery or PID selection.',
     'Before departure inspect worker scheduling and at least two stored six-byte 017A RAW positives when eligible; PARTIAL is an evidence warning, not a health or safety certificate.',
     'Retain complete raw bytes and asynchronous context timestamps/age. Obtain independent reference readings, units and uncertainty before interpreting a pressure hypothesis.',
-    'The driver must not interact with the laptop while driving. Finish/Disconnect after parking.',
+    'The driver must not interact with the laptop while driving. Finish Session after parking automatically closes the journal, verifies a private bundle and disconnects. Check the exact saved path.',
     'Read-only preparation only: no additional requests, scans, unsupported PID selection, regeneration or rate change. Aggregate ceiling remains 4 application commands/s.']
 
 

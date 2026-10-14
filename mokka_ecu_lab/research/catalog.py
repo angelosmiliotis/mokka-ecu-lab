@@ -9,6 +9,7 @@ from pathlib import Path
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL, RESEARCH_CANDIDATES
 from mokka_ecu_lab.capture import DECODER_VERSION
 from mokka_ecu_lab.sensors import load_registry
+from .roadmap import research_roadmap
 
 SCHEMA_VERSION = 1
 STATUSES = ('STANDARD_DOCUMENTED','VEHICLE_OBSERVED','EXPERIMENTAL','UNVERIFIED_LAYOUT',
@@ -31,7 +32,7 @@ def new_catalog():
         manufacturer_candidates=[dict(c,evidence_state='EXPERIMENTAL',exact_payload_length=None,
             units='UNKNOWN',signedness='UNKNOWN',flags='UNKNOWN',sentinel_handling='UNKNOWN',
             last_verification_time=None) for c in RESEARCH_CANDIDATES],
-        evidence=[],hypotheses=[],
+        evidence=[],hypotheses=[],research_roadmap=research_roadmap(),
         limitations='No VIN lookup or ECU identification queries. Shared make/engine/ECU families do not establish DID compatibility. Definitions and evidence states never grant transmit permissions.')
 
 
@@ -49,6 +50,7 @@ class KnowledgeBase:
             if any(not isinstance(self.data.get(k),list) for k in ('evidence','hypotheses')):
                 raise ValueError('Invalid local evidence catalog')
             self.data.update(standard_definitions=template['standard_definitions'],
+                research_roadmap=template['research_roadmap'],
                 manufacturer_candidates=template['manufacturer_candidates'],definition_revision=DECODER_VERSION)
         else: self.data = new_catalog()
 
