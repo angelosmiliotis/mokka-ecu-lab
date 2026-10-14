@@ -1,5 +1,13 @@
 # Architecture
 
+## v0.2.8 canonical session ownership
+
+`SessionCoordinator` belongs to the existing acquisition thread. The Session Dashboard projects its acknowledged lifecycle, with no second transport or competing acquisition state machine. Connect leaves recording/polling off after ECU confirmation. Start creates one journal before fresh bitmap/positive-response Discovery and delegates all-eligible DPF Priority capture/proof to the existing Full Auto planner. Submission and dispatch reject conflicting manual mutations. Finish interrupts waits, closes the journal first, independently verifies a fresh private bundle, then disconnects. Final exported state is persisted separately from the bundle's journal-close coordinator checkpoint.
+
+Allowlists, strict framing, numeric definitions, capture planner and weighted scheduler remain unchanged. The rate policy remains 4 total send-starts/s; a rechecked nanosecond deadline handles early Windows timeout returns, and new connections inherit the worker's last send. Synthetic validation uses isolated preferences and fresh data.
+
+Offline DPF evolution, private phase analysis and the roadmap have no acquisition-worker reference. Explicit recovery preserves the journal/truncated tail, rejects malformed complete records, and reconstructs only missing standard rows without replacing historical decoded values. Schema additions stay inside existing checksum-covered JSON members, retaining older-bundle compatibility.
+
 ## v0.2.7 acknowledged automatic capture and private phases
 
 `auto_capture.py` owns pure all-eligible plans and constant-memory per-PID receipts. A deliberate Full Auto action runs existing recording, initialization, supported standard Discovery, basic strict samples and capture activation in the same serialized worker. It adds no transport path, command permission or decoder. Proposed plans stay separate from acknowledged effective schedules. The automatic scope rejects non-affirmative/conflicting current bitmaps and obtains RAW readiness from ordinary scheduled transactions only after recorder append. Periodic receipt checkpoints and atomic SQLite session closure metadata retain outcomes without duplicating receipts into every raw journal entry. Existing transport stop/cancel behavior is preserved.

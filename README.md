@@ -1,6 +1,6 @@
 # Mokka ECU Lab
 
-Version 0.2.7 adds **Full Auto Research Drive**: one explicit parked preset consent starts recording, connects, runs bounded standard Discovery and selects all eligible known standard sensors automatically. Eligible six-byte 017A remains RAW-only; departure preflight requires a worker-confirmed schedule and two stored RAW positives. Comprehensive and DPF Priority presets retain fair sampling under the unchanged 4 aggregate req/s limit. Private offline Sport/Normal comparisons preserve user-reported uncertainty, asynchronous sampling and non-causal interpretation. See [the Full Auto operator guide](docs/FULL_AUTO.md), [state/UX guide](docs/UX_STATUS.md), [desktop design](docs/UI_DESIGN.md) and [manual operator guide](DRIVE_CAPTURE.md).
+Version 0.2.8 uses **Connect → Start Session → Finish Session** on the default Session Dashboard. Start records fresh ECU-specific Discovery and every eligible known standard PID/RAW target with DPF Priority; Finish closes the journal, verifies a unique private Research Bundle and disconnects automatically. No separate Recording, Discovery, PID/RAW selection or Export action is required. Six-byte 017A remains RAW-only with two stored polling replies required for research readiness. All validated subfields, actual cadence, omissions and categorized errors are visible. The unchanged read-only command scope and 4 total req/s ceiling now use a monotonic deadline that rechecks early Windows wake-ups and preserves the budget across connections. See [the three-action operator guide](docs/SESSION_WORKFLOW.md) and [offline research roadmap](research/v0.2.8-roadmap.md). Legacy Full Auto and manual tools remain in Advanced / Developer.
 
 A locally runnable Windows 11 desktop application for read-only OBD-II acquisition, recording, replay and offline decoder research. Python 3.12+ / PySide6 / pyserial. No account, telemetry or automatic connection. The first delivery includes ten generic Mode 01 sensors. Manufacturer-specific live requests are intentionally absent.
 
@@ -14,7 +14,7 @@ For source execution, double-click **launch.cmd**, or from this directory:
 .\.venv\Scripts\python.exe -m mokka_ecu_lab
 ```
 
-The application starts disconnected with Simulation selected. Data defaults to `%LOCALAPPDATA%\MokkaECULab\data`, outside this OneDrive workspace. Data is local from the application's perspective; Windows backup/sync policies are under your control.
+The application always starts disconnected. A first launch selects Simulation; subsequent launches can reuse the last successfully confirmed source/outgoing port. Data defaults to `%LOCALAPPDATA%\MokkaECULab\data`, outside this OneDrive workspace. Data is local from the application's perspective; Windows backup/sync policies are under your control.
 
 ## Install on another Windows 11 computer
 

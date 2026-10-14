@@ -1,5 +1,16 @@
 # Changes
 
+## 0.2.8 — Standard automatic sessions and private RAW research
+
+- Default Session Dashboard with three primary actions: Connect verifies the configured Windows port and actual CAN ECU; Start Session records fresh session Discovery and all eligible known standard PIDs/RAW evidence with DPF Priority; Finish Session closes, automatically exports/checksum-verifies a unique private bundle, then disconnects. Start authorizes the displayed profile without individual RAW/PID checkboxes.
+- One coordinator in the existing serialized worker; stable session ID, acknowledged stages, conflicting/manual action guards, duplicate Start/Finish protection, no automatic reconnect. Manual diagnostics remain in Advanced / Developer. Connection-only initialization is correctly labelled unrecorded; session bitmap chains are reacquired in the journal.
+- Full per-field catalog with availability/source/units, last valid time, query outcome, counts, cadence, adaptive age and omissions. Retain a last valid reading separately from a canceled/failed attempt. NOx absence, reagent quantization and SCR historical/current limitations stay explicit.
+- Preserve six-byte 017A as numerically unverified RAW; two stored polling replies plus worker scheduling establish research proof. Other eligible sensors continue when DPF proof is PARTIAL. Export failure preserves the journal; explicit offline retry and interrupted recovery repair only missing decoded rows.
+- Strengthen the same 4 total req/s ceiling: recheck monotonic nanosecond deadlines after early Windows wait timeouts and inherit the application's last send across connections. No command/allowlist, ISO-TP, numeric decoder or weighted-scheduler expansion.
+- Private offline DPF evolution HTML/JSON with HYPOTHESIS-only byte/word alternatives, real UTC points, asynchronous context ages and stationary/moving summaries. Separate unrecorded Discovery snapshots from actual journal/polling proof. No pressure formula, regeneration, soot, ash or health inference.
+- Offline research records document sources, applicability, units/length/formula where known, contradictions and validation requirements. Future standard/OEM leads stay blocked. Sport/Normal observational analysis and offline trends remain available.
+- Synthetic-only regression/native/executable validation; isolated preferences and fresh validation directories protect user data. Real evidence and derived private results are excluded from Git/releases.
+
 ## 0.2.7 — Full Auto research drive and private phase comparison
 
 - One explicit parked preset consent records before a new connection, awaits the actual ECU, performs bounded existing standard Discovery and automatically selects every eligible known standard PID. Comprehensive and DPF Priority preserve the existing serialized transport, allowlist, strict framing and 4 aggregate req/s ceiling.

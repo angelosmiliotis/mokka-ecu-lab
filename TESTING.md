@@ -1,5 +1,25 @@
 # Testing and vehicle validation
 
+## Version 0.2.8 software and packaged validation
+
+**432 tests passed** in the final complete run (163.29 s). New synthetic regressions cover the canonical single-worker session lifecycle, fresh recorded bitmap evidence, stable recording identity, duplicate/conflicting actions, successful stored RAW polling proof, automatically verified export/disconnect, export failure and explicit offline recovery, field visibility and strict offline DPF provenance. Last valid values and failed/cancelled latest queries remain separate. Recovery retains original journal bytes, including an interrupted tail; complete malformed records are rejected.
+
+The native three-action runs each scheduled all **13** eligible PIDs in the constructed diesel scenario, omitted nine unsupported definitions, stored at least three samples per scheduled PID and **11** six-byte 017A polling positives, with zero monitoring errors. DPF Research Priority remains the default. Actual wire send starts were at least **250 ms** apart, including initialization and Discovery. An early Windows wait return exposed a limiter defect during verification; the existing limiter now rechecks a monotonic nanosecond deadline, and a later connection inherits the application send budget. The command policy and **4 aggregate req/s** ceiling are unchanged.
+
+Native Windows Qt inspection passed **180 geometry checks**: 48 session-state checks, 96 main-page checks and 36 offline-view checks, across four physical resolutions (1280×720 through 1920×1080) at controlled Qt pixel ratios 1, 1.25 and 1.5. Screenshots were visually reviewed. Vertical scrolling and independently scrolling tables are expected at small sizes/high DPI; page horizontal overflow was absent. No OS display setting was changed. The maximum session GUI heartbeat gap was 0.313 s outside deliberate verification resizing.
+
+The final packaged build matches all **39 project source modules**. Four actual packaged processes (two startup, legacy Full Auto, standard three-action session) exited **0, 0, 0, 0**. Packaged standard operation scheduled 13 PIDs, stored seven six-byte 017A polling positives, closed the recording, automatically verified its bundle and disconnected with zero monitoring errors. Source/executable offline evidence and DPF HTML/JSON are byte-identical for constructed input. Separate private regression of the three supplied historical LIVE bundles also preserved the original inputs; none of those files or derived results is distributed.
+
+The allowlist/protocol, ISO-TP parser, numeric sensor layouts, weighted scheduler and manual capture planner remain unchanged from published v0.2.7. The rate-limit implementation was strengthened as described above. Six-byte 017A remains RAW-only: pressure, regeneration, soot and ash are not established. No OEM/UDS candidate in the offline roadmap is enabled. Physical v0.2.8 ECU/adapter/drive validation is **pending**. See [operation and field checklist](docs/SESSION_WORKFLOW.md), [synthetic screenshots](docs/screenshots/v0.2.8) and [portable synthetic results](samples/v0.2.8-validation.json).
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\verify_session.py --output-dir release\fresh-session-check --scale 1
+.\.venv\Scripts\python.exe scripts\verify_packaged.py --exe release\YOUR_BUILD\MokkaECULab\MokkaECULab.exe --output-dir release\fresh-packaged-check
+```
+
+Use fresh ignored output directories. Native DPI verification asserts the actual Qt ratio and opens no COM port. Packaged validation checks process exit, not merely a saved success JSON. Offline-view verification accepts only constructed simulator input.
+
 ## Version 0.2.7 software and packaged validation
 
 **411 tests passed** in the final complete run (154.49 s). All new public fixtures are constructed in tests or use the existing simulator. Checks cover single preset consent, recording before connection, actual worker acknowledgments, ordered current per-ECU bitmaps, conflicting/duplicate/malformed evidence, no unknown/unsupported probes, all eligible known PIDs, numeric-versus-RAW representation, bounded preflight and healthy explicit Retry, source/replay isolation, repeated stored six-byte 017A proof, fair priority ratios, minimum sampling and measured aggregate send-start spacing of at least 250 ms. Bluetooth failure and repeated ECU rejection never reconnect automatically. Long-run receipt history and previews remain bounded.

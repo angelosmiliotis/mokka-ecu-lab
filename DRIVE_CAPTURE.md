@@ -1,5 +1,7 @@
 # Drive Capture and offline report operator guide
 
+For v0.2.8 normal operation use **Session Dashboard → Connect → Start Session → Finish Session**. Recording, fresh Discovery, all-eligible DPF Priority capture, verified private bundle and disconnect are automatic. See [the current operator guide](docs/SESSION_WORKFLOW.md). The manual workflow below is available in Advanced / Developer when no automatic session owns acquisition.
+
 ## v0.2.7 Full Auto recommended workflow
 
 Use [Full Auto Research Drive](docs/FULL_AUTO.md) while parked: select LIVE/outgoing port/baud, choose Comprehensive or DPF Priority, give one preset RAW consent and press Start Full Auto Research Drive. Recording, connection, safe standard Discovery and all eligible sensor selection follow worker acknowledgments. Before departure require 017A RAW scheduled and at least two stored six-byte positives when eligible; PARTIAL explains missing evidence without blocking other valid measurements indefinitely. Finish and export after parking. No individual RAW/NOx checkboxes are required in this automatic workflow. Manual operation below remains available. The prior v0.2.4 road-test statement applies to offline report fixes, not physical validation of the new preset.
