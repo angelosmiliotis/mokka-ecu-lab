@@ -131,6 +131,9 @@ def export_research_bundle(root: Path, session_id: str, target: Path, *, include
                      capture_weights=evidence.get('capture_weights',{}),vehicle_verified=False,
                      capture_raw_pids=evidence.get('capture_raw_pids',[]),
                      acquisition_receipt=evidence.get('acquisition_receipt'),
+                     session_coordinator=evidence.get('session_coordinator'),
+                     coordinator_snapshot_scope='Journal-close checkpoint; final ZIP verification is stored separately in the local session database',
+                     recovery=json.loads(session.get('metadata') or '{}').get('recovery'),
                      raw_only_samples=sum(r['raw_only'] for r in raw_observations),
                      redaction='Default application export; adapter/port/identity bytes and personal metadata excluded')
         for name,data in [('discovery-report.json',report),('session-summary.json',summary),
