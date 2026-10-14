@@ -20,6 +20,7 @@ from mokka_ecu_lab.capture import capture_plan, DECODER_VERSION
 from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, layout_evidence
 from mokka_ecu_lab.auto_capture import auto_plan, AcquisitionReceipt, PRESETS, affirmative_bitmap
 from mokka_ecu_lab import __version__
+from mokka_ecu_lab.session import SessionCoordinator, CONFLICTS, export_closed_session, recover_interrupted_session
 
 class AcquisitionWorker(threading.Thread):
     def __init__(self, root: Path):
@@ -49,6 +50,10 @@ class AcquisitionWorker(threading.Thread):
         self.auto_last_save = 0.
         self.bitmap_evidence = {}
         self.bitmap_conflicts = set()
+        self.session = SessionCoordinator()
+        self.session_internal = False
+        self.session_last_publish = 0.
+        self.last_application_send_ns = 0
         self.can_protocol = False
         self.polling = False
         self.priorities = {}
@@ -78,6 +83,10 @@ class AcquisitionWorker(threading.Thread):
                 except queue.Full: pass
 
     def submit(self, action, **kwargs):
+        if self.session.active and action in CONFLICTS:
+            self.emit('session_rejected', 'Automatic session owns acquisition; Finish Session first')
+            return False
+        if action in {'session_finish','shutdown'}: self.session.finish_requested=True
         if action=='marker':
             token=uuid.uuid4().hex
             recorder=self.recorder
@@ -85,16 +94,17 @@ class AcquisitionWorker(threading.Thread):
                 self.pending_markers[token]=dict(kwargs,session_id=recorder.id if recorder else None,
                                                 timestamp=utc_now(),monotonic_ns=time.monotonic_ns())
             kwargs={'marker_id':token}
-        if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture", "full_auto", "retry_auto"}:
+        if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture", "full_auto", "retry_auto", "session_connect", "session_start"}:
             # Clear only at user submission, so a later Stop cancels queued Connect too.
             self.stop_io.clear()
-        if action in {"disconnect", "stop", "shutdown", "replay"}:
+        if action in {"disconnect", "stop", "shutdown", "replay", "session_finish"}:
             self.stop_io.set()
         try: self.commands.put_nowait((action, kwargs))
         except queue.Full:
             if action=='marker':
                 with self.marker_lock: self.pending_markers.pop(kwargs['marker_id'],None)
             raise
+        return True
 
     def transaction(self, command):
         sent_ns, stamp = time.monotonic_ns(), utc_now()
@@ -149,6 +159,7 @@ class AcquisitionWorker(threading.Thread):
             error, status = str(exc), "INVALID"
         wire_ns = self.transport.last_wire_ns
         if wire_ns is not None:
+            self.last_application_send_ns=wire_ns
             stamp = datetime.fromtimestamp(time.time() - (time.monotonic_ns() - wire_ns) / 1e9, timezone.utc).isoformat(timespec='microseconds')
             sent_ns = wire_ns
             for reading in readings:
@@ -191,6 +202,8 @@ class AcquisitionWorker(threading.Thread):
             self.auto_receipt.observe(record, readings, recorded=bool(self.recorder),
                 active=self.capture_mode and self.auto_receipt.data['state'] in {'WAITING_RAW','PARTIAL','READY'})
             self.update_auto_receipt()
+        if self.session.active and not self.auto_starting:
+            self.publish_session()
         self.emit("transaction", (record, readings))
         if status == "TRANSPORT_ERROR":
             raise TransportError(error, raw)
@@ -239,10 +252,15 @@ class AcquisitionWorker(threading.Thread):
             problems = [dict(ecu=self.discovery_target,reason=record['error'])]
         for problem in problems:
             source = problem['ecu'] or (self.discovery_target if self.capture_mode else None) or 'unknown'
-            sample = dict(self.discovery_observations.get((source,pid),{}),
+            prior=self.discovery_observations.get((source,pid),{})
+            last_valid=prior.get('last_valid_sample')
+            if prior.get('fields') and not prior.get('error'):
+                last_valid={k:prior[k] for k in ('ecu','pid','timestamp','monotonic_ns','fields','source_kind') if k in prior}
+            sample = dict(prior,
                           ecu=problem['ecu'] or (source if source!='unknown' else None),pid=pid,error=problem['reason'],
                           error_timestamp=record['timestamp'],raw_b64=record['raw_b64'],
                           replay=record.get('replay',False),source_kind=record.get('source_kind','UNKNOWN'))
+            sample.update(last_valid_sample=last_valid,last_attempt=dict(status=record['status'],timestamp=record['timestamp'],reason=problem['reason']))
             if problem.get('category')!='DECODER_LAYOUT':
                 sample.update(framing_valid=False,raw_only=False,layout_status='INVALID_RESPONSE')
             self.discovery_observations[source,pid] = sample
@@ -273,6 +291,7 @@ class AcquisitionWorker(threading.Thread):
                 discovery_target=self.discovery_target,capture_weights=self.capture_weights,
                 capture_raw_pids=sorted(self.capture_raw_pids),
                 acquisition_receipt=self.auto_receipt.snapshot() if self.auto_receipt else None,
+                session_coordinator=self.session.snapshot() if self.session.active else None,
                 support={e:sorted(p) for e,p in self.support.items()},
                 support_pages={e:sorted(p) for e,p in self.support_pages.items()},
                 report=discovery_report(self.support,self.support_pages,self.discovery_observations,mode=self.mode,context_id=self.context_id))
@@ -292,6 +311,10 @@ class AcquisitionWorker(threading.Thread):
         self.auto_receipt.readiness(state in {'WAITING_RAW','PARTIAL','READY'} and self.capture_mode and self.polling and bool(self.recorder))
         self.emit('auto_capture',self.auto_receipt.snapshot())
         self.save_capture_evidence()
+        if self.session.active:
+            mapping={'RECORDING':'RECORDING_SETUP','DISCOVERING':'DISCOVERING','CONFIGURED':'CONFIGURING',
+                     'WAITING_RAW':'CAPTURING','READY':'CAPTURING','PARTIAL':'PARTIAL','ABORTED':'FAILED','STOPPED':'PARTIAL'}
+            if state in mapping: self.session_stage(mapping[state],reason)
 
     def update_auto_receipt(self, force=False):
         if not self.auto_receipt: return
@@ -334,6 +357,9 @@ class AcquisitionWorker(threading.Thread):
         previous=self.auto_receipt.snapshot() if self.auto_receipt and self.recorder and self.auto_receipt.data.get('session_id')==self.recorder.id else None
         consent_time=options.get('inherited_consent_timestamp') or utc_now()
         self.auto_receipt=AcquisitionReceipt(preset,True,consent_time)
+        if options.get('session_recording'):
+            self.auto_receipt.data.update(consent_provenance='EXPLICIT_START_SESSION_FIXED_READ_ONLY_PROFILE',
+                pre_connect_initialization_recorded=False)
         self.auto_receipt.data['requested_source']='SIMULATION' if options.get('simulation') else 'LIVE'
         if previous:
             history=previous.pop('previous_attempts',[])
@@ -345,7 +371,7 @@ class AcquisitionWorker(threading.Thread):
         try:
             self.handle('record',{})
             if not self.recorder: raise ValueError('Recording did not start')
-            self.auto_stage('RECORDING','Recording acknowledged before connection; initialization retained')
+            self.auto_stage('RECORDING','Recording acknowledged before session Discovery; pre-Connect initialization was not recorded' if reuse else 'Recording acknowledged before connection; initialization retained')
             if not reuse:
                 self.auto_stage('CONNECTING','Opening explicitly selected source; awaiting positive ECU response')
                 self.initialize(options)
@@ -361,6 +387,13 @@ class AcquisitionWorker(threading.Thread):
             if any(e==target for e,base in self.bitmap_conflicts):
                 raise ValueError('Conflicting raw bitmap evidence for current ECU; no automatic sensor probing')
             self.auto_stage('DISCOVERING',f'ECU {target} confirmed; bounded standard supported-PID Discovery')
+            if options.get('session_recording'):
+                # Reacquire the entire chain inside this journal; old connection samples
+                # must never masquerade as recorded session Discovery evidence.
+                self.support={}; self.support_pages={}; self.bitmap_evidence={}; self.bitmap_conflicts=set()
+                self.discovery_observations={}
+                self.ingest_bitmap(self.transaction('0100'),0)
+                if target not in self.support: raise ValueError('Current recorded bitmap does not confirm the connected ECU')
             self.discover(target)
             if not self.discovery_prepared or self.requires_reconnect or self.stop_io.is_set():
                 raise ValueError('Discovery did not complete; no automatic retry')
@@ -539,6 +572,9 @@ class AcquisitionWorker(threading.Thread):
         self.adapter, self.protocol = "Unknown", "Unknown"
         self.transport = Simulator(options.get("scenario", "Normal idle")) if options["simulation"] else SerialTransport(self.port, options.get("baud", 115200))
         self.transport.rate = self.rate
+        # One application budget, including a new connection/initialization.
+        self.transport._last_send_ns=self.last_application_send_ns
+        self.transport.last_send=self.last_application_send_ns/1e9
         self.emit("notice", f"Opening {self.port} at {options.get('baud', 115200)} baud, 8N1; bounded prompt timeout 6 s. {self.mode}")
         self.emit("connection", {"adapter": "Initializing", "ecu": "Not yet verified", "protocol": "Unknown", "mode": self.mode})
         identity = self.transaction("ATI")
@@ -629,8 +665,136 @@ class AcquisitionWorker(threading.Thread):
         self.retain_discovery_errors(record)
         self.emit("transaction", (record, readings))
 
+    def publish_session(self, force=False):
+        now=time.monotonic()
+        if not force and now-self.session_last_publish<1: return
+        self.session_last_publish=now
+        data=self.session.snapshot()
+        data.update(context_id=self.context_id,mode=self.mode,port=self.port,rate_limit=self.rate,
+            recording_active=bool(self.recorder),adapter_open=bool(self.transport),
+            polling_active=self.polling,requires_reconnect=self.requires_reconnect,
+            receipt=self.auto_receipt.snapshot() if self.auto_receipt and self.auto_receipt.data.get('session_id')==data.get('session_id') else data.get('exported_acquisition_receipt'))
+        if self.recorder:
+            data.update(session_id=self.recorder.id,journal_path=str(self.recorder.path.resolve()),
+                recorded_transactions=self.recorder.count,transaction_errors=self.recorder.errors)
+        self.emit('session_state',data)
+
+    def session_stage(self,state,reason,**values):
+        if self.recorder: values['session_id']=self.recorder.id
+        self.session.transition(state,reason,**values)
+        if self.recorder:
+            self.recorder.marker('Note','Session '+state+': '+reason,self.mode)
+            self.save_capture_evidence()
+        self.publish_session(True)
+
+    def connect_session(self,options):
+        if self.session.active or self.recorder or self.replay:
+            self.emit('session_rejected','Finish recording / leave replay before standard Connect'); return
+        if self.session.data['state']=='CONNECTED' and self.transport and not self.requires_reconnect:
+            self.publish_session(True); return
+        self.session_stage('CONNECTING','Opening the explicitly configured source; awaiting positive ECU identity',active=False)
+        try:
+            if not options.get('simulation'):
+                from serial.tools import list_ports
+                devices={p.device.upper():p for p in list_ports.comports()}
+                chosen=options.get('port','').strip().upper()
+                if chosen not in devices: raise ValueError('Configured outgoing port is not currently enumerated by Windows; review Connection settings. No Bluetooth pairing/reset was attempted.')
+                if 'INCOMING' in (devices[chosen].description or '').upper(): raise ValueError('Select the Windows outgoing serial port')
+            self.auto_receipt=None
+            self.initialize(options)
+            self.set_polling(False,'Connected; Start Session begins recording and acquisition')
+            candidates=[e for e in self.support if e!='headerless']
+            target=options.get('ecu') or (candidates[0] if len(candidates)==1 else None)
+            if not self.can_protocol or target not in candidates:
+                raise ValueError('A unique positively responding CAN ECU is required; multiple ECUs require explicit selection in Advanced / Developer')
+            self.session_stage('CONNECTED','ECU positively confirmed; connection alone is not a recording',
+                active=False,ecu=target,mode=self.mode,port=self.port,session_id=None,
+                recorded_transactions=0,transaction_errors=0,duration_seconds=0,journal_path=None,journal_closed=False,
+                source_kind='SIMULATED' if self.mode=='SIMULATED' else 'ECU_READING')
+        except Exception as exc:
+            self.disconnect()
+            self.session_stage('FAILED',str(exc),active=False,session_id=None)
+
+    def start_session(self,options):
+        if self.session.active:
+            self.publish_session(True); return
+        if self.session.data['state']!='CONNECTED' or not self.transport or self.requires_reconnect or self.recorder or self.replay:
+            self.emit('session_rejected','Connect and confirm the ECU first; no automatic reconnect or overlapping recording'); return
+        if bool(options.get('simulation'))!=(self.mode=='SIMULATED'):
+            self.emit('session_rejected','Selected source differs from the confirmed connection'); return
+        self.session.begin(); self.publish_session(True)
+        self.session_internal=True
+        try:
+            self.full_auto(dict(options,reuse=True,consent=True,preset=PRESETS[1],
+                ecu=self.session.data['ecu'],session_recording=True))
+            self.auto_receipt.data['consent_provenance']='EXPLICIT_START_SESSION_FIXED_READ_ONLY_PROFILE'
+            self.auto_receipt.data['pre_connect_initialization_recorded']=False
+            self.save_capture_evidence(); self.publish_session(True)
+        except Exception as exc:
+            self.session_stage('PARTIAL' if isinstance(exc,Cancelled) else 'FAILED',str(exc)+'; Finish Session preserves and exports available evidence')
+            if not isinstance(exc,Cancelled): self.set_polling(False,str(exc),requires_reconnect=True)
+        finally: self.session_internal=False
+
+    def persist_closed_coordinator(self):
+        import json
+        from mokka_ecu_lab.logging import connect_database
+        session_id=self.session.data.get('session_id')
+        if not session_id: return
+        db=connect_database(self.root)
+        try:
+            row=db.execute('SELECT metadata FROM sessions WHERE id=?',(session_id,)).fetchone()
+            if row:
+                data=json.loads(row[0] or '{}'); data.setdefault('capture_evidence',{})['session_coordinator']=self.session.snapshot()
+                db.execute('UPDATE sessions SET metadata=? WHERE id=?',(json.dumps(data),session_id)); db.commit()
+        finally: db.close()
+
+    def finish_standard_session(self):
+        if not self.session.active: self.publish_session(True); return
+        session_id=self.recorder.id if self.recorder else self.session.data.get('session_id')
+        self.session_stage('FINALIZING','Stopping acquisition, closing original journal, then verifying the automatic private bundle')
+        if self.recorder:
+            self.session.data.update(recorded_transactions=self.recorder.count,transaction_errors=self.recorder.errors,
+                journal_path=str(self.recorder.path.resolve()))
+        self.session.data['duration_seconds']=(datetime.now(timezone.utc)-datetime.fromisoformat(self.session.data['started_at'])).total_seconds()
+        self.set_polling(False,'Session finalization',self.requires_reconnect)
+        self.capture_mode=False; self.discovery_active=False
+        if self.transport: self.transport.discovery_enabled=False
+        self.emit_capture('Finalizing standard session')
+        try:
+            self.close_recording()
+            if not session_id: raise ValueError('No session journal was created')
+            self.session.data.update(session_id=session_id,journal_closed=True)
+            result=export_closed_session(self.root,session_id)
+            self.disconnect(finish_recording=False)
+            self.session_stage('EXPORTED','Private bundle verified; journal closed and adapter disconnected',active=False,export_error=None,**result)
+        except Exception as exc:
+            self.disconnect(finish_recording=False)
+            self.session_stage('FAILED','Export/finalization failed; original journal preserved. Use explicit offline export retry.',
+                active=bool(self.recorder),session_id=session_id,export_error=str(exc),retry_export=not bool(self.recorder))
+        self.persist_closed_coordinator()
+
+    def retry_session_export(self,options):
+        if self.session.active or self.recorder or self.transport:
+            self.emit('session_rejected','Offline recovery/export requires no active recording or connection'); return
+        session_id=options.get('session_id') or self.session.data.get('session_id')
+        self.session_stage('FINALIZING','Explicit offline recovery/export; no ECU requests',active=False,session_id=session_id)
+        self.auto_receipt=None
+        try:
+            recover_interrupted_session(self.root,session_id)
+            result=export_closed_session(self.root,session_id)
+            self.session_stage('EXPORTED','Offline bundle verified; original journal preserved',active=False,export_error=None,retry_export=False,**result)
+        except Exception as exc:
+            self.session_stage('FAILED','Offline export failed; original journal preserved',active=False,export_error=str(exc),retry_export=True)
+        self.persist_closed_coordinator()
+
     def handle(self, action, options):
-        if action == 'full_auto': self.full_auto(options)
+        if self.session.active and action in CONFLICTS and not self.session_internal:
+            self.emit('session_rejected','Automatic session owns acquisition; Finish Session first'); return
+        if action=='session_connect': self.connect_session(options)
+        elif action=='session_start': self.start_session(options)
+        elif action=='session_finish': self.finish_standard_session()
+        elif action=='session_export_retry': self.retry_session_export(options)
+        elif action == 'full_auto': self.full_auto(options)
         elif action == 'retry_auto':
             if not self.auto_receipt or not self.transport or self.requires_reconnect or self.replay or not self.recorder or not self.discovery_prepared:
                 self.reject_auto('Retry requires an open healthy transport, active recording and completed Discovery; reconnect is explicit'); return
@@ -755,7 +919,9 @@ class AcquisitionWorker(threading.Thread):
             self.pending_record = None
             if record: self.decode_replay(record); self.replay_previous = record["monotonic_ns"]
             else: self.emit("notice", "Replay complete. " + '; '.join(self.replay.warnings))
-        elif action == "shutdown": self.quit_event.set()
+        elif action == "shutdown":
+            if self.session.active: self.finish_standard_session()
+            self.quit_event.set()
 
     def persist_marker(self, options):
         if 'marker_id' in options:
@@ -780,10 +946,14 @@ class AcquisitionWorker(threading.Thread):
                 except queue.Empty: pass
                 except Cancelled:
                     self.set_polling(False, "Connection canceled")
-                    if self.transport and self.transport.last_wire_ns is not None:
+                    if self.session.active and self.session.finish_requested: self.finish_standard_session()
+                    elif self.transport and self.transport.last_wire_ns is not None:
                         self.disconnect(); self.emit("notice", "Receive canceled after send; reconnect to restore prompt synchronization")
                 except Exception as exc:
-                    self.emit("notice", str(exc)); self.disconnect()
+                    self.emit("notice", str(exc))
+                    if self.session.active:
+                        self.close_recording(); self.session_stage('PARTIAL',str(exc)+'; explicit reconnect required after Finish Session')
+                    self.disconnect()
                 if self.polling and self.transport and not self.stop_io.is_set():
                     pids = list(self.capture_weights) if self.capture_mode else [p for p in self.selected if p in LIVE_PIDS and p in self.transport.supported]
                     if self.discovery_active and not self.capture_mode:
@@ -809,10 +979,14 @@ class AcquisitionWorker(threading.Thread):
                             if self.auto_receipt: self.auto_stage('ABORTED',reason+'; reconnect explicitly')
                     except Cancelled:
                         self.set_polling(False, "Polling canceled", self.requires_reconnect)
-                        if self.transport and self.transport.last_wire_ns is not None:
+                        if self.session.active and self.session.finish_requested: self.finish_standard_session()
+                        elif self.transport and self.transport.last_wire_ns is not None:
                             self.disconnect(); self.emit("notice", "Receive canceled after send; reconnect to restore prompt synchronization")
                     except Exception as exc:
-                        self.emit("notice", str(exc)); self.disconnect()
+                        self.emit("notice", str(exc))
+                        if self.session.active:
+                            self.close_recording(); self.session_stage('PARTIAL',str(exc)+'; Finish Session exports saved evidence')
+                        self.disconnect()
                 if self.replay_playing and self.replay:
                     try:
                         if self.pending_record is None:
@@ -829,5 +1003,6 @@ class AcquisitionWorker(threading.Thread):
                     except Exception as exc:
                         self.replay_playing = False; self.emit("notice", str(exc))
         finally:
+            if self.session.active: self.finish_standard_session()
             self.disconnect()
             if self.replay: self.replay.close()
