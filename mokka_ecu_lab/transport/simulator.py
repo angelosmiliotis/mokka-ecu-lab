@@ -5,6 +5,7 @@ from . import SafeTransport, TransportError, Cancelled
 SCENARIOS = ["Normal idle", "Warming up", "RPM variation", "Adapter timeout", "ECU timeout", "Malformed response", "Unsupported PID", "Disconnection", "Multiple ECUs", "Whitespace and echo", "Incomplete reply", "Conditions Not Correct"]
 SCENARIOS += ['Diesel discovery', 'Diesel discovery 29-bit', 'Diesel multi-ECU', 'Diesel truncated', 'Diesel unknown page']
 SCENARIOS += ['Diesel alternative layouts']
+SCENARIOS += ['Diesel thirteen sensors']
 
 # Constructed, non-identifying payloads. Shape and framing tests, not live logs.
 ALTERNATIVE_PAYLOADS = {0x7A: bytes.fromhex('00 C8 00 00 00 00'),
@@ -43,6 +44,9 @@ class Simulator(SafeTransport):
             self.supported_fixture.update(DIESEL_PAYLOADS)
             self.supported_fixture.update({0x60,0x80,0xA0,0xA1})
         if scenario == "Unsupported PID": self.supported_fixture.remove(92)
+        if scenario == 'Diesel thirteen sensors':
+            # Constructed fixed-list subset; never copied raw support bytes or telemetry.
+            self.supported_fixture={4,5,11,12,13,15,16,66,70,0x7A,0x83,0x85,0x88,0x60,0x80}
 
     def _exchange(self, command, stop, timeout):
         if stop.wait(0.015): raise Cancelled("Simulation stopped")
@@ -70,6 +74,8 @@ class Simulator(SafeTransport):
             if pid in DIESEL_PAYLOADS and self.scenario.startswith('Diesel'):
                 header = '18DAF110' if '29-bit' in self.scenario else '7E8'
                 payload=ALTERNATIVE_PAYLOADS.get(pid,DIESEL_PAYLOADS[pid]) if self.scenario=='Diesel alternative layouts' else DIESEL_PAYLOADS[pid]
+                if self.scenario=='Diesel thirteen sensors' and pid==0x7A:
+                    payload=bytes([0xA5,40+self.n%20,3,4,5,6])
                 line = can_reply(header,pid,payload)
                 if self.scenario == 'Diesel truncated' and len(DIESEL_PAYLOADS[pid]) > 5:
                     line = line.split('\r')[0]

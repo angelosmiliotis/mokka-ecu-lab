@@ -28,6 +28,7 @@ class SafeTransport:
         self.last_send = 0.0
         self.rate = 4.0
         self.last_wire_ns = None
+        self._last_send_ns = 0
 
     def exchange(self, command: str, stop: threading.Event, timeout: float = 6.0) -> bytes:
         if threading.get_ident() != self.owner:
@@ -38,10 +39,18 @@ class SafeTransport:
         self.last_wire_ns = None
         if not 0.25 <= self.rate <= 4:
             raise ValueError("Total request rate must be between 0.25 and 4 Hz")
-        if stop.wait(max(0, 1 / self.rate - (time.monotonic() - self.last_send))) or stop.is_set():
-            raise Cancelled("Stopped before send")
-        self.last_send = time.monotonic()
+        # Windows waits can time out before the requested duration. A timeout
+        # is not proof the next send is permitted: recheck the exact clock.
+        import math
+        deadline_ns=self._last_send_ns+math.ceil(1e9/self.rate) if self.last_send else 0
+        while True:
+            remaining_ns=deadline_ns-time.monotonic_ns()
+            if stop.is_set(): raise Cancelled('Stopped before send')
+            if remaining_ns<=0: break
+            if stop.wait(remaining_ns/1e9): raise Cancelled('Stopped before send')
         self.last_wire_ns = time.monotonic_ns()
+        self._last_send_ns = self.last_wire_ns
+        self.last_send = self.last_wire_ns / 1e9
         return self._exchange(command, stop, timeout)
 
     def close(self):
