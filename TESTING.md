@@ -1,5 +1,28 @@
 # Testing and vehicle validation
 
+## Version 0.2.10 software and packaged validation
+
+**571 tests passed** in the complete regression run (258.85 s). After the final compact-sidebar adjustment, **19 targeted UI tests passed**. New synthetic cases cover all four fixed benchmark rates, fresh support and same-ECU positive preflight, speed checks, a full monotonic 60-second window, phase separation, deadlines and receive allowance, truthful failure counts, conflict rejection, Stop, partial preservation, offline export retry and consecutive-run comparisons. The strict synthetic 15-byte 018C case remains undecoded. No real vehicle bytes or chronology are public fixtures.
+
+Native Windows inspection passed **240 geometry checks** across 1280×720, 1366×768, 1536×864 and 1920×1080 at actual Qt pixel ratios 1, 1.25 and 1.5: 48 session states, 36 new Benchmark states, 96 main-page checks and 60 offline-view checks. All **33 contact sheets** were visually reviewed. The Benchmark label remains visible in compact navigation; start/stop/countdown remain accessible. No page horizontal overflow was found; vertical pages and wide tables scroll independently. No OS display setting was changed.
+
+Each native new Benchmark run measured at least 60 seconds after separate preflight, sent 115 measurement requests at selected 2 req/s, retained at least 500 ms wire spacing, verified its automatic private bundle and disconnected without errors. The final packaged benchmark measured 60.047 s. The one-second receive allowance and adapter/application overhead make 120 sends an upper bound, not a promised count. Native expanded sessions scheduled all 36 eligible synthetic PIDs and stored six-byte RAW polling positives with zero monitoring errors. Deliberate Discovery layout mismatches and user cancellation remain separately classified.
+
+The final Windows executable matches all **47 compiled project modules**, with zero source mismatches. Six actual packaged processes exited **0, 0, 0, 0, 0, 0**: two startup checks, legacy Full Auto, original 13-PID session, expanded 36-PID session and the new 60-second Benchmark. Bundles were verified and connections closed. Source/executable offline OBD, DPF and evidence JSON/HTML are byte-identical for constructed drive and Benchmark inputs. Separate private regression also preserved all original inputs and kept every derived result outside Git; none is distributed.
+
+The existing command allowlist, one serialized worker and hard **4 aggregate req/s** ceiling remain unchanged. A benchmark never adapts upward or launches a second run. Normal operation remains Connect → Start Session → Finish Session. The optional critical subset trades broad coverage for DPF/turbo cadence within the same ceiling. New sensor commands and unverified OEM/UDS requests are not enabled.
+
+Physical v0.2.10 ECU/adapter validation is **pending**. Exact 15-byte 018C interpretation, 0101 full readiness, 019D applicable definition, six-byte 017A pressure/regeneration/soot/ash and independent sensor calibration remain unverified. See [Benchmark operation and next parked test](docs/V0210_BENCHMARK.md), [evidence review](research/v0.2.10-evidence-review.md), [synthetic screenshots](docs/screenshots/v0.2.10) and [portable synthetic results](samples/v0.2.10-validation.json).
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\verify_benchmark.py --output-dir release\fresh-v0210-benchmark --scale 1
+.\.venv\Scripts\python.exe scripts\verify_session.py --expanded --output-dir release\fresh-v0210-session --scale 1
+.\.venv\Scripts\python.exe scripts\verify_packaged.py --exe release\YOUR_BUILD\MokkaECULab\MokkaECULab.exe --output-dir release\fresh-v0210-packaged
+```
+
+Use fresh ignored output directories. All software/UI checks explicitly select simulation and never a COM port. Historical results below describe their original version and are not the current Benchmark duration contract.
+
 ## Version 0.2.9 software and packaged validation
 
 **525 tests passed** in the complete regression run (213.28 s). The final simulation-only benchmark driver correction was also checked with 25 targeted passing tests. New independent synthetic cases cover all 23 reviewed standard definitions, exact lengths, field flags, signed data, reserved/unknown enums, MAP/MAF range selectors, current bitmap and positive-response gates, inventory provenance, passive performance, bounded adaptive recovery, benchmark conflict/abort/deadline behavior and aggregate wire spacing. No real vehicle bytes or chronology are public fixtures.

@@ -1,5 +1,12 @@
 # Changes
 
+## 0.2.10 — One-click sixty-second Benchmark
+
+- Permanent Benchmark sidebar page: select 1/2/3/4 req/s, Start BENCH, automatic connection/current bitmap and positive pretest, stationary speed checks, true 60-second measurement, private verified export and disconnect. Preflight is separate and bounded; fixed 240-send cap replaces premature 48-send termination on the new workflow.
+- Same speed/RPM/MAP/MAF mix across rates, original journal SHA, recorded phase provenance, countdown/progress, actual rates/latency and clear rejection/abort/offline recovery. One serialized worker, unchanged allowlist and hard 4 req/s ceiling; no OEM/UDS or automatic rate search.
+- Improved offline communication summaries, payload-length evidence and separate benchmark comparisons. Optional explicit DPF + Turbo critical-subset profile; default Comprehensive retains every eligible sensor. DPF RAW motion/coolant groups remain descriptive and age-gated.
+- Independent private evidence audit; no new numeric 018C variant or unsupported 0101/019D request enabled. Private vehicle data/reports remain excluded; public tests and screenshots are constructed.
+
 ## 0.2.9 — Standard inventory and bounded OBD research/performance
 
 - Preserve the three-action automatic session, every previously eligible PID and genuine stored 017A RAW proof. Add 23 reviewed OCT2011 standard layouts in a separate fixed policy scope, with current support/positive gates and explicit candidate omissions. No new OEM/UDS request. 0101 readiness implementation and unverified 019D remain outside live scope.
