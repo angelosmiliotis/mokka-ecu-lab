@@ -132,6 +132,8 @@ def export_research_bundle(root: Path, session_id: str, target: Path, *, include
                      capture_raw_pids=evidence.get('capture_raw_pids',[]),
                      acquisition_receipt=evidence.get('acquisition_receipt'),
                      session_coordinator=evidence.get('session_coordinator'),
+                     stationary_benchmark=evidence.get('stationary_benchmark'),
+                     original_journal_sha256=hashlib.sha256((root/session['raw_path']).read_bytes()).hexdigest(),
                      coordinator_snapshot_scope='Journal-close checkpoint; final ZIP verification is stored separately in the local session database',
                      recovery=json.loads(session.get('metadata') or '{}').get('recovery'),
                      raw_only_samples=sum(r['raw_only'] for r in raw_observations),
