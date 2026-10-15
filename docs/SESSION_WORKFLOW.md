@@ -1,5 +1,7 @@
 # Session Dashboard · v0.2.8
 
+**Current v0.2.9:** the same three actions now use the reviewed 45-identifier software scope, adaptive pacing at ≤4 total req/s, and automatic companion inventory/performance reports. See [current definitions and benchmark operation](V029_RESEARCH_PERFORMANCE.md). The 22-PID scope described below is the historical v0.2.8 baseline; the source tag for that release is preserved.
+
 The standard workflow has three primary actions: **Connect → Start Session → Finish Session**. Manual Recording, Discovery, Drive Capture, individual PID/RAW selection and independent stop/resume belong to **Advanced / Developer** diagnostics. They cannot replace an active automatic session.
 
 ## Normal operation
