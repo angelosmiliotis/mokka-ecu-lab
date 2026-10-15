@@ -15,6 +15,7 @@ from pathlib import Path
 from mokka_ecu_lab.protocols import BITMAP_PIDS, supported_pids, support_state
 from mokka_ecu_lab.protocols.isotp import parse_reply
 from mokka_ecu_lab.sensors import load_registry
+from mokka_ecu_lab.sensors.extended import basic_range
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 from mokka_ecu_lab.capture import DECODER_VERSION
 from mokka_ecu_lab import __version__
@@ -59,7 +60,11 @@ class BitmapEvidence:
         self.accepted={p:v for p,v in self.accepted.items() if p<base}
 
     def observe(self, pid, payload):
-        if len(payload)!=4: return 'BITMAP_INVALID_LENGTH'
+        if len(payload)!=4:
+            self.invalidate(pid);return 'BITMAP_INVALID_LENGTH'
+        try:supported_pids(payload,pid)
+        except ValueError:
+            self.invalidate(pid);self.problems.append(f'01{pid:02X}: reserved or invalid bitmap bits');return 'BITMAP_INVALID_RESERVED_BITS'
         prior=self.seen.setdefault(pid,set()); prior.add(payload)
         if len(prior)>1:
             self.invalidate(pid); self.problems.append(f'01{pid:02X}: conflicting original bitmap values')
@@ -122,7 +127,8 @@ def complete_row(e, g, bitmap, snapshots, ambiguous=False):
     if snapshot_state=='UNSUPPORTED': notes.append('Snapshot UNSUPPORTED refers to this standard PID; an OEM equivalent is not ruled out.')
     bitmap_states=e['bitmap_evidence_states']
     if pid in BITMAP_PIDS:
-        if 'BITMAP_CHAIN_CONFLICT' in bitmap_states or any(p<=pid for p in bitmap.conflicts): layout='BITMAP_CHAIN_CONFLICT'
+        if set(bitmap_states) in ({'BITMAP_INVALID_LENGTH'},{'BITMAP_INVALID_RESERVED_BITS'}):layout=next(iter(bitmap_states))
+        elif 'BITMAP_CHAIN_CONFLICT' in bitmap_states or any(p<=pid for p in bitmap.conflicts): layout='BITMAP_CHAIN_CONFLICT'
         elif len(bitmap_states)>1: layout='BITMAP_MIXED_EVIDENCE'
         else: layout=next(iter(bitmap_states),'NO_POSITIVE_RESPONSE')
         if 'BITMAP_VALID_UNANCHORED' in bitmap_states: notes.append('MISSING_PREDECESSOR_EVIDENCE: four-byte bitmap is valid; its bits cannot infer support.')
@@ -225,7 +231,7 @@ def analyze_bundles(paths):
                 if key not in groups:
                     if len(groups)>=MAX_GROUPS: raise ValueError('Too many source groups in one bundle (128 maximum)')
                     groups[key] = dict(ecu=key[0],mode=mode,source_kind=source,bitmap=BitmapEvidence(),
-                        matrix={},samples=[],cache={},last={},missing=[])
+                        matrix={},samples=[],cache={},last={},missing=[],ranges={})
                 return groups[key]
             def entry(g):
                 return g['matrix'].setdefault(pid,matrix_entry(pid))
@@ -253,10 +259,11 @@ def analyze_bundles(paths):
                 try:
                     if pid in STANDARD_DIESEL:
                         fields = STANDARD_DIESEL[pid].decode(payload)
+                        if pid in {0x4F,0x50}:g['ranges'][pid]=payload
                         if any(f.support_bit is not None for f in STANDARD_DIESEL[pid].fields): e['support_flags'][payload[0]] += 1
                     elif pid in registry:
                         sensor = registry[pid]
-                        value = sensor.decode(payload)
+                        value = basic_range(sensor,payload,g['ranges'])
                         fields = [dict(sensor_id=sensor.id,value=value,unit=sensor.unit,state='AVAILABLE')]
                     else: decode_error = 'No code-owned decoder'
                 except ValueError as exc: decode_error = str(exc)

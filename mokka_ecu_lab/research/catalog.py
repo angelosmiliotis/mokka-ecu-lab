@@ -10,6 +10,7 @@ from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL, RESEARCH_CANDIDATES
 from mokka_ecu_lab.capture import DECODER_VERSION
 from mokka_ecu_lab.sensors import load_registry
 from .roadmap import research_roadmap
+from mokka_ecu_lab.protocols import EXTENSION_PIDS
 
 SCHEMA_VERSION = 1
 STATUSES = ('STANDARD_DOCUMENTED','VEHICLE_OBSERVED','EXPERIMENTAL','UNVERIFIED_LAYOUT',
@@ -27,7 +28,7 @@ def new_catalog():
             calibration_identification='UNKNOWN',confidence='PROVISIONAL',identity_source=None),
         standard_definitions=basic+[dict(s.metadata(),source_response_identifier='UNKNOWN',
             evidence_state='STANDARD_DOCUMENTED',last_verification_time=None,
-            test_provenance='Constructed fixtures; tests/test_diesel_decoders.py and tests/test_scr_decoder.py')
+            test_provenance='Constructed fixtures; tests/test_standard_extension.py' if s.pid in EXTENSION_PIDS else 'Constructed fixtures; tests/test_diesel_decoders.py and tests/test_scr_decoder.py')
             for s in STANDARD_DIESEL.values()],
         manufacturer_candidates=[dict(c,evidence_state='EXPERIMENTAL',exact_payload_length=None,
             units='UNKNOWN',signedness='UNKNOWN',flags='UNKNOWN',sentinel_handling='UNKNOWN',
