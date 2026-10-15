@@ -139,6 +139,9 @@ STANDARD_DIESEL = {
         Field('average_distance','Average distance between successful active regenerations',5,2,'km',support_bit=6)), 0x80),
 }
 
+from .extended import EXTENDED_STANDARD
+STANDARD_DIESEL.update(EXTENDED_STANDARD)
+
 RESEARCH_CANDIDATES = tuple({'request': request, 'name': name, 'system': 'DPF', 'ecu_family': 'Bosch MD1CS003 (reported; actual ECU unconfirmed)',
     'verification': 'RESEARCH_ONLY', 'support': 'UNVERIFIED', 'live_enabled': False,
     'formula': 'Unknown; no numeric decoder', 'source': 'https://www.forum-peugeot.com/Forum/threads/obd2-dpf.131744/',
