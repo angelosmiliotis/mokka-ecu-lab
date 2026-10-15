@@ -1,0 +1,186 @@
+{
+  "version": "0.2.9",
+  "source": "SIMULATED",
+  "private_input_used": false,
+  "hardware_connected": false,
+  "tests": {
+    "passed": 525,
+    "seconds": 213.28,
+    "final_driver_targeted_passed": 25
+  },
+  "reviewed_standard_additions": 23,
+  "fixed_non_bitmap_software_scope": 45,
+  "compiled_project_modules": 44,
+  "compiled_source_mismatches": 0,
+  "native_geometry_checks": {
+    "expanded_session": 48,
+    "legacy_session": 48,
+    "all_main_pages": 96,
+    "offline_views": 60,
+    "stationary_benchmark": 24,
+    "total": 276
+  },
+  "controlled_qt_pixel_ratios": [
+    1,
+    1.25,
+    1.5
+  ],
+  "physical_resolutions": [
+    [
+      1280,
+      720
+    ],
+    [
+      1366,
+      768
+    ],
+    [
+      1536,
+      864
+    ],
+    [
+      1920,
+      1080
+    ]
+  ],
+  "visual_review": true,
+  "reviewed_contact_sheets": 36,
+  "native_primary_actions": [
+    "Connect",
+    "Start Session",
+    "Finish Session"
+  ],
+  "default_preset": "DPF Research Priority",
+  "expanded_scheduled_pids": 36,
+  "native_expanded_stored_017a_polling_positives": [
+    11,
+    13,
+    13
+  ],
+  "minimum_actual_wire_send_gap_seconds": 0.25,
+  "monitoring_errors": 0,
+  "automatic_bundle_verified": true,
+  "disconnected_after_export": true,
+  "synthetic_offline_source_executable_json_html_identical": true,
+  "packaged": {
+    "actual_process_exits": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "stationary_benchmark": {
+      "passed": true,
+      "source": "SIMULATED",
+      "private_input_used": false,
+      "hardware_connected": false,
+      "requests": 48,
+      "fixed_rate": 2,
+      "minimum_recorded_wire_gap_ms": 500.0,
+      "all_wire_gaps_at_least_250ms": true,
+      "automatic_bundle_verified": true,
+      "disconnected": true,
+      "native_geometry": [
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1280,
+            720
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1366,
+            768
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1536,
+            864
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1920,
+            1080
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1280,
+            720
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1366,
+            768
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1536,
+            864
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1920,
+            1080
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        }
+      ],
+      "maximum_gui_tick_gap_seconds": 0.18800000000192085
+    },
+    "expanded_scheduled_pids": 36,
+    "expanded_stored_017a_raw_frames": 7,
+    "source": "SIMULATED",
+    "private_input_used": false,
+    "hardware_connected": false,
+    "startup_transactions": 11,
+    "startup_errors": 0,
+    "automatic_scheduled_pids": 21,
+    "stored_017a_raw_frames": 2,
+    "monitoring_errors": 0,
+    "closed_recording": true,
+    "worker_receipt_checksums_verified": true,
+    "standard_primary_actions": [
+      "Connect",
+      "Start Session",
+      "Finish Session"
+    ],
+    "standard_scheduled_pids": 13,
+    "standard_stored_017a_raw_frames": 7,
+    "standard_automatic_bundle_verified": true,
+    "standard_disconnected_after_export": true
+  },
+  "physical_vehicle_validation": "PENDING",
+  "six_byte_017a_numeric_decoder": "UNVERIFIED",
+  "regeneration_soot_ash_inference": "NOT IMPLEMENTED: insufficient verified evidence"
+}
