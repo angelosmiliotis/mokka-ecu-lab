@@ -6,6 +6,11 @@ import re
 LIVE_PIDS = frozenset({0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x42, 0x46, 0x5C})
 BITMAP_PIDS = frozenset(range(0, 0x100, 0x20))
 DISCOVERY_PIDS = frozenset({0x73, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7F, 0x83, 0x85, 0x86, 0x88, 0x8B})
+# Reviewed OCT2011 definitions for the authorized v0.2.9 standard expansion.
+# Advertised but unimplemented 01/9D remain outside this code-owned policy.
+EXTENSION_PIDS = frozenset({0x11,0x1C,0x1F,0x21,0x23,0x2C,0x2D,0x30,0x31,0x33,0x3C,
+                          0x49,0x4A,0x4C,0x4D,0x4E,0x4F,0x50,0x51,0x5E,0x71,0x8C,0x8F})
+DISCOVERY_PIDS = DISCOVERY_PIDS | EXTENSION_PIDS
 DISCOVERY_SETUP = frozenset({'ATCAF1', 'ATCFC1', 'ATAL'})
 ADAPTER_COMMANDS = frozenset({"ATI", "STI", "ATE0", "ATL0", "ATS1", "ATH1", "ATM0", "ATTP0", "ATST64", "ATDP", "ATDPN"})
 
@@ -105,8 +110,9 @@ def _legacy_parse_obd(raw: bytes, pid: int, command: str = "") -> list[Response]
     return responses
 
 def supported_pids(payload: bytes, base: int) -> set[int]:
-    if len(payload) != 4:
+    if len(payload) != 4 or base not in BITMAP_PIDS:
         raise ValueError("Support bitmap must contain exactly four bytes")
+    if base==0xE0 and payload[-1]&1:raise ValueError('Reserved final bitmap bit cannot advertise an identifier beyond FF')
     bits = int.from_bytes(payload, "big")
     return {base + i + 1 for i in range(32) if bits & (1 << (31 - i))}
 
