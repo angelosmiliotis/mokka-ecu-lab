@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from mokka_ecu_lab.transport import SerialTransport, TransportError, Cancelled
 from mokka_ecu_lab.transport.simulator import Simulator
-from mokka_ecu_lab.protocols import parse_obd, supported_pids, LIVE_PIDS, BITMAP_PIDS, DISCOVERY_PIDS
+from mokka_ecu_lab.protocols import parse_obd, supported_pids, LIVE_PIDS, BITMAP_PIDS, DISCOVERY_PIDS, EXTENSION_PIDS
 from mokka_ecu_lab.protocols.isotp import parse_reply
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.sensors import load_registry
+from mokka_ecu_lab.sensors.extended import basic_range
+from .pacing import AdaptivePacing, StationaryBenchmark
 from mokka_ecu_lab.logging import Recorder, utc_now
 from mokka_ecu_lab.replay import Replay
 from .scheduling import PollScheduler
@@ -31,6 +33,7 @@ class AcquisitionWorker(threading.Thread):
         self.stop_io = threading.Event()
         self.quit_event = threading.Event()
         self.transport = self.recorder = self.replay = None
+        self.benchmark=None
         self.registry = load_registry()
         self.selected = list(self.registry)
         self.adapter, self.protocol, self.port, self.mode = "Unknown", "Unknown", "", "Disconnected"
@@ -62,6 +65,9 @@ class AcquisitionWorker(threading.Thread):
         self.requires_reconnect = False
         self.context_id = uuid.uuid4().hex
         self.rate = 4.0
+        self.pacing=AdaptivePacing(self.rate)
+        self.range_configuration={}
+        self.positive_wire_evidence={}
         self.dropped = 0
         self.replay_playing = False
         self.replay_speed = 1.0
@@ -83,10 +89,13 @@ class AcquisitionWorker(threading.Thread):
                 except queue.Full: pass
 
     def submit(self, action, **kwargs):
+        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','shutdown'}:
+            self.emit('notice','Stationary benchmark owns acquisition; stop it first');return False
         if self.session.active and action in CONFLICTS:
             self.emit('session_rejected', 'Automatic session owns acquisition; Finish Session first')
             return False
         if action in {'session_finish','shutdown'}: self.session.finish_requested=True
+        if action=='benchmark_stop':self.stop_io.set()
         if action=='marker':
             token=uuid.uuid4().hex
             recorder=self.recorder
@@ -94,7 +103,7 @@ class AcquisitionWorker(threading.Thread):
                 self.pending_markers[token]=dict(kwargs,session_id=recorder.id if recorder else None,
                                                 timestamp=utc_now(),monotonic_ns=time.monotonic_ns())
             kwargs={'marker_id':token}
-        if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture", "full_auto", "retry_auto", "session_connect", "session_start"}:
+        if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture", "full_auto", "retry_auto", "session_connect", "session_start", "benchmark_start"}:
             # Clear only at user submission, so a later Stop cancels queued Connect too.
             self.stop_io.clear()
         if action in {"disconnect", "stop", "shutdown", "replay", "session_finish"}:
@@ -106,12 +115,12 @@ class AcquisitionWorker(threading.Thread):
             raise
         return True
 
-    def transaction(self, command):
+    def transaction(self, command,timeout=6.):
         sent_ns, stamp = time.monotonic_ns(), utc_now()
         raw, error, status, readings, parsed, rejections = b"", "", "OK", [], [], []
         protocol_errors, discovery_samples = [], []
         try:
-            raw = self.transport.exchange(command, self.stop_io)
+            raw = self.transport.exchange(command, self.stop_io,timeout=timeout)
             if command.startswith("01"):
                 pid = int(command[2:], 16)
                 result = parse_reply(raw, pid, command)
@@ -135,13 +144,14 @@ class AcquisitionWorker(threading.Thread):
                                                     'category':'DECODER_LAYOUT'})
                         else:
                             readings.extend(self.diesel_readings(sample, pid, stamp, sent_ns))
+                            if pid in {0x4F,0x50}:self.range_configuration.setdefault(source,{})[pid]=reply.data
                     if pid in self.registry:
                         if pid not in self.support.get(source, set()):
                             continue
                         sensor = self.registry[pid]
-                        try: decoded = sensor.decode(reply.data)
+                        try: decoded = basic_range(sensor,reply.data,self.range_configuration.get(source,{}),self.support.get(source,set()))
                         except ValueError as exc:
-                            protocol_errors.append({'ecu':reply.header, 'reason':str(exc), 'state':'INVALID'}); continue
+                            protocol_errors.append({'ecu':reply.header, 'reason':str(exc), 'state':'INVALID','category':'DECODER_LAYOUT'}); continue
                         readings.append({"sensor_id": sensor.id, "pid": pid, "ecu": reply.header,
                             "value": decoded, "unit": sensor.unit,
                             "verification": sensor.metadata["verification"], "timestamp": stamp,
@@ -189,13 +199,30 @@ class AcquisitionWorker(threading.Thread):
             "protocol_errors": protocol_errors, "discovery_samples": discovery_samples,
             "verification": [r["verification"] for r in readings], "error": error}
         record.update(application_version=__version__,decoder_version=DECODER_VERSION)
+        record['range_configuration']={ecu:{f'{pid:02X}':value.hex(' ').upper() for pid,value in ranges.items()} for ecu,ranges in self.range_configuration.items()}
+        record.update(effective_request_rate_hz=self.transport.rate,policy_ceiling_hz=min(4.,self.rate),
+            pacing_mode='FIXED_STATIONARY_BENCHMARK' if self.benchmark and self.benchmark.active else 'ADAPTIVE' if self.session.active and self.capture_mode else 'FIXED_POLICY')
         record['raw_only'] = bool(self.capture_mode and command.startswith('01') and int(command[2:],16) in self.capture_raw_pids)
         record['raw_samples'] = [s for s in discovery_samples if s.get('raw_only')]
+        if record['sent'] and record['status']=='OK':
+            for reading in readings:
+                if reading['pid'] not in {0x0C,0x0B,0x10}:continue
+                key=(reading['ecu'],reading['pid'])
+                self.positive_wire_evidence[key]={k:record[k] for k in ('id','command','timestamp','monotonic_ns','raw_b64','context_id','mode','source_kind','status')}
+            while len(self.positive_wire_evidence)>128:self.positive_wire_evidence.pop(next(iter(self.positive_wire_evidence)))
         if command.startswith('01') and int(command[2:],16) in DISCOVERY_PIDS:
             record['support_evidence'] = {e:sorted(p) for e,p in self.support.items()}
             record['support_pages'] = {e:sorted(p) for e,p in self.support_pages.items()}
         self.retain_discovery_errors(record)
         if self.recorder: self.recorder.append(record, readings)
+        if self.session.active and self.capture_mode and not self.auto_starting and not self.benchmark:
+            if self.pacing.observe(record,time.monotonic()):
+                self.transport.rate=self.pacing.rate
+                self.emit('notice',f'Adaptive aggregate pacing {self.pacing.rate:g} req/s: {self.pacing.reason}')
+            if self.auto_receipt:
+                self.auto_receipt.data['adaptive_pacing']=self.pacing.snapshot()
+                for entry in self.auto_receipt.data['effective_schedule'].values():
+                    entry['nominal_interval_seconds']=sum(self.capture_weights.values())/(entry['weight']*self.transport.rate)
         if self.auto_receipt:
             if self.recorder and (self.auto_starting or self.auto_receipt.data['state'] in {'WAITING_RAW','PARTIAL','READY'}):
                 self.auto_receipt.track_transaction(record)
@@ -270,6 +297,7 @@ class AcquisitionWorker(threading.Thread):
     def diesel_readings(self, sample, pid, stamp, sent_ns):
         return [dict(sensor_id=f['sensor_id'], pid=pid, ecu=sample['ecu'], value=f['value'], unit=f['unit'],
                      verification=f['verification'], timestamp=stamp, monotonic_ns=sent_ns,
+                     display=f.get('display'),
                      decoder=f['sensor_id'], mode=self.mode, source_kind=sample['source_kind'])
                 for f in sample['fields'] if f['state']=='AVAILABLE']
 
@@ -291,10 +319,52 @@ class AcquisitionWorker(threading.Thread):
                 discovery_target=self.discovery_target,capture_weights=self.capture_weights,
                 capture_raw_pids=sorted(self.capture_raw_pids),
                 acquisition_receipt=self.auto_receipt.snapshot() if self.auto_receipt else None,
+                stationary_benchmark=self.benchmark.snapshot() if self.benchmark else None,
                 session_coordinator=self.session.snapshot() if self.session.active else None,
                 support={e:sorted(p) for e,p in self.support.items()},
                 support_pages={e:sorted(p) for e,p in self.support_pages.items()},
                 report=discovery_report(self.support,self.support_pages,self.discovery_observations,mode=self.mode,context_id=self.context_id))
+
+    def start_benchmark(self,options):
+        if options.get('parked_consent') is not True:raise ValueError('Explicit parked/brake/ventilation/no-other-client consent required')
+        if self.session.active or self.recorder or self.replay or not self.transport or not self.can_protocol or self.polling or self.requires_reconnect or not self.discovery_completed:
+            raise ValueError('Benchmark requires connected idle current Discovery, no recording/automatic session; use Advanced while parked')
+        target=self.discovery_target
+        pids=[p for p in (0x0C,0x0B,0x10) if affirmative_bitmap(self.support,self.support_pages,target,p) and
+              self.positive_wire_evidence.get((target,p),{}).get('context_id')==self.context_id and
+              0<=(time.monotonic_ns()-self.discovery_observations.get((target,p),{}).get('monotonic_ns',0))/1e9<=60 and
+              not self.discovery_observations.get((target,p),{}).get('error') and any(f.get('state')=='AVAILABLE' for f in self.discovery_observations.get((target,p),{}).get('fields',[]))]
+        rate=float(options.get('rate',2.))
+        if not .25<=rate<=min(self.rate,4.):raise ValueError('Benchmark exceeds configured approved ceiling')
+        self.benchmark=StationaryBenchmark(pids,rate,time.monotonic(),ecu=target,context_id=self.context_id,mode=self.mode)
+        self.auto_receipt=None;self.emit('auto_reset',dict(context_id=self.context_id))
+        self.recorder=Recorder(self.root,self.mode,{'purpose':'EXPLICIT_STATIONARY_BENCHMARK','conditions':'USER_REPORTED','higher_rate_authorized':False,
+            'pretest_evidence_provenance':'UNRECORDED_CURRENT_CONNECTION; not benchmark polling proof',
+            'pretest_positive_wire_evidence':{f'{p:02X}':self.positive_wire_evidence[target,p] for p in pids},
+            'pretest_original_bitmap_evidence':self.bitmap_evidence.get(target,{})})
+        self.emit('recording',self.recorder.id)
+        self.benchmark.session_id=self.recorder.id
+        self.transport.rate=rate;self.save_capture_evidence();self.emit('benchmark',self.benchmark.snapshot())
+
+    def finish_benchmark(self,reason=None):
+        if not self.benchmark:return
+        self.benchmark.active=False
+        if reason:self.benchmark.reason=reason
+        result=self.benchmark.snapshot();sid=self.recorder.id if self.recorder else None
+        self.close_recording();self.disconnect(finish_recording=False)
+        try:
+            if sid:result.update(export_closed_session(self.root,sid))
+        except Exception as exc:result['export_error']=str(exc)
+        result.update(active=False,disconnected=True);self.emit('benchmark',result);self.benchmark=None
+
+    def benchmark_tick(self):
+        pid=self.benchmark.next_pid(time.monotonic())
+        if pid is None:return self.finish_benchmark('Fixed benchmark completed at request/time bound')
+        remaining=self.benchmark.maximum_seconds-(time.monotonic()-self.benchmark.started)-1/self.benchmark.rate
+        if remaining<=.1:return self.finish_benchmark('Fixed benchmark duration bound reached')
+        record=self.transaction(f'01{pid:02X}',timeout=min(6.,remaining));self.benchmark.observe(record)
+        self.emit('benchmark',self.benchmark.snapshot())
+        if not self.benchmark.active:self.finish_benchmark()
 
     def emit_capture(self,reason):
         self.emit('capture',dict(active=self.capture_mode,weights=dict(self.capture_weights),
@@ -392,6 +462,8 @@ class AcquisitionWorker(threading.Thread):
                 # must never masquerade as recorded session Discovery evidence.
                 self.support={}; self.support_pages={}; self.bitmap_evidence={}; self.bitmap_conflicts=set()
                 self.discovery_observations={}
+                self.range_configuration={}
+                self.positive_wire_evidence={}
                 self.ingest_bitmap(self.transaction('0100'),0)
                 if target not in self.support: raise ValueError('Current recorded bitmap does not confirm the connected ECU')
             self.discover(target)
@@ -467,6 +539,7 @@ class AcquisitionWorker(threading.Thread):
         self.capture_raw_pids = set()
         self.emit_capture('Discovery; no drive monitoring')
         self.discovery_target = target
+        self.range_configuration.pop(target,None)
         self.discovery_prepared = False
         self.discovery_completed = False
         self.discovery_active = False
@@ -487,12 +560,17 @@ class AcquisitionWorker(threading.Thread):
                 self.ingest_bitmap(record,base)
                 if base not in self.support_pages[target]: break
             self.failures = 0
-            for pid in sorted(DISCOVERY_PIDS & self.support[target]):
+            for pid in sorted(DISCOVERY_PIDS & self.support[target],key=lambda p:(p not in {0x4F,0x50},p)):
                 if self.auto_starting and (not affirmative_bitmap(self.support,self.support_pages,target,pid) or
                                           any(e==target for e,base in self.bitmap_conflicts)):
                     continue
                 if self.stop_io.is_set(): raise Cancelled('Discovery stopped before send')
                 record = self.transaction(f'01{pid:02X}')
+                if record['status']=='TRANSPORT_ERROR' or pid in EXTENSION_PIDS and any(r['nrc']=='22' for r in record['negative_responses']):
+                    self.set_polling(False,record['error'],requires_reconnect=True);break
+                # Bad candidate layouts/NO DATA are retained and omitted, not
+                # repeated probes or false throughput failures.
+                if pid in EXTENSION_PIDS and record['status']!='OK':continue
                 self.failures = self.failures+1 if record['status']!='OK' else 0
                 if self.failures >= 3:
                     self.set_polling(False, record['error'], requires_reconnect=True); break
@@ -554,6 +632,9 @@ class AcquisitionWorker(threading.Thread):
         self.bitmap_evidence = {}
         self.bitmap_conflicts = set()
         self.discovery_observations = {}
+        self.range_configuration={}
+        self.pacing=AdaptivePacing(self.rate)
+        self.positive_wire_evidence={}
         self.discovery_completed = False
         self.capture_weights = {}
         self.capture_raw_pids = set()
@@ -648,6 +729,7 @@ class AcquisitionWorker(threading.Thread):
                     if sample.get('error'):
                         record['protocol_errors'].append(dict(ecu=reply.header,reason=sample['error'],state='INVALID',category='DECODER_LAYOUT'))
                     self.discovery_observations[reply.header or 'headerless',pid] = sample
+                    if pid in {0x4F,0x50} and not sample.get('error'):self.range_configuration.setdefault(reply.header or 'headerless',{})[pid]=reply.data
                     record['discovery_samples'].append(sample)
                     for reading in self.diesel_readings(sample,pid,record['timestamp'],record['monotonic_ns']):
                         reading['mode'] = 'REPLAY · '+record.get('mode','unknown'); readings.append(reading)
@@ -657,7 +739,7 @@ class AcquisitionWorker(threading.Thread):
                 try:
                     for reply in positive_replies:
                         readings.append({"sensor_id": sensor.id, "pid": pid, "ecu": reply.header,
-                            "value": sensor.decode(reply.data), "unit": sensor.unit,
+                            "value": basic_range(sensor,reply.data,self.range_configuration.get(reply.header or 'headerless',{})), "unit": sensor.unit,
                             "verification": sensor.metadata["verification"], "timestamp": record["timestamp"],
                             "monotonic_ns": record["monotonic_ns"], "mode": "REPLAY · " + record.get("mode", "unknown"),
                             "source_kind": "SIMULATED" if record.get("mode") == "SIMULATED" else "ECU_READING" if record.get("mode", "").startswith("LIVE") else "UNKNOWN"})
@@ -788,9 +870,16 @@ class AcquisitionWorker(threading.Thread):
         self.persist_closed_coordinator()
 
     def handle(self, action, options):
+        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','shutdown'}:
+            self.emit('notice','Stationary benchmark owns acquisition; stop it first');return
         if self.session.active and action in CONFLICTS and not self.session_internal:
             self.emit('session_rejected','Automatic session owns acquisition; Finish Session first'); return
-        if action=='session_connect': self.connect_session(options)
+        if action=='benchmark_start':
+            try:self.start_benchmark(options)
+            except ValueError as exc:
+                self.emit('notice','Benchmark rejected: '+str(exc));self.emit('benchmark',dict(active=False,reason='Rejected: '+str(exc)))
+        elif action=='benchmark_stop':self.finish_benchmark('Explicit Stop; no automatic resume/reconnect')
+        elif action=='session_connect': self.connect_session(options)
         elif action=='session_start': self.start_session(options)
         elif action=='session_finish': self.finish_standard_session()
         elif action=='session_export_retry': self.retry_session_export(options)
@@ -875,6 +964,7 @@ class AcquisitionWorker(threading.Thread):
         elif action == "priorities": self.priorities = options["weights"] if options.get("enabled") else {}
         elif action == "rate":
             self.rate = max(0.25, min(4., options["rate"]))
+            self.pacing=AdaptivePacing(self.rate)
             if self.transport: self.transport.rate = self.rate
             if self.auto_receipt and self.capture_mode:
                 self.auto_receipt.data['rate_limit']=self.rate
@@ -896,6 +986,7 @@ class AcquisitionWorker(threading.Thread):
         elif action == "record_stop":
             self.close_recording()
         elif action == "replay":
+            self.range_configuration={}
             self.disconnect()
             if self.replay: self.replay.close()
             self.replay = Replay(Path(options["path"]))
@@ -920,6 +1011,7 @@ class AcquisitionWorker(threading.Thread):
             if record: self.decode_replay(record); self.replay_previous = record["monotonic_ns"]
             else: self.emit("notice", "Replay complete. " + '; '.join(self.replay.warnings))
         elif action == "shutdown":
+            if self.benchmark:self.finish_benchmark('Application shutdown; no automatic restart')
             if self.session.active: self.finish_standard_session()
             self.quit_event.set()
 
@@ -954,6 +1046,10 @@ class AcquisitionWorker(threading.Thread):
                     if self.session.active:
                         self.close_recording(); self.session_stage('PARTIAL',str(exc)+'; explicit reconnect required after Finish Session')
                     self.disconnect()
+                if self.benchmark and self.benchmark.active:
+                    try:self.benchmark_tick()
+                    except Exception as exc:self.finish_benchmark('Aborted: '+str(exc))
+                    continue
                 if self.polling and self.transport and not self.stop_io.is_set():
                     pids = list(self.capture_weights) if self.capture_mode else [p for p in self.selected if p in LIVE_PIDS and p in self.transport.supported]
                     if self.discovery_active and not self.capture_mode:
@@ -964,6 +1060,18 @@ class AcquisitionWorker(threading.Thread):
                         continue
                     try:
                         record = self.transaction(f"01{pid:02X}")
+                        if record['status']=='TRANSPORT_ERROR':
+                            self.set_polling(False,record['error'],requires_reconnect=True);self.capture_mode=False;self.discovery_active=False
+                            self.transport.discovery_enabled=False;self.emit_capture('Transport failure; explicit reconnect required')
+                            if self.auto_receipt:self.auto_stage('ABORTED',record['error'])
+                            continue
+                        if pid in EXTENSION_PIDS and record['status']!='OK' and not any(r['nrc']=='22' for r in record['negative_responses']):
+                            if pid in {0x4F,0x50}:self.range_configuration.get(self.discovery_target,{}).pop(pid,None)
+                            self.capture_weights.pop(pid,None)
+                            if self.auto_receipt:
+                                self.auto_receipt.data['effective_schedule'].pop(f'{pid:02X}',None)
+                                self.auto_receipt.data.setdefault('runtime_omissions',[]).append(dict(pid=f'{pid:02X}',reason=record['error'],timestamp=record['timestamp']))
+                            self.emit_capture('Candidate disabled after invalid current reply');continue
                         self.failures = self.failures + 1 if record["status"] != "OK" else 0
                         if self.failures >= 3:
                             reason = ("Conditions Not Correct (7F 01 22); ignition state is not confirmed"
