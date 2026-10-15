@@ -18,7 +18,7 @@ if output.exists(): parser.error('Choose a fresh validation output directory')
 output.mkdir(parents=True)
 exits=[]
 for name,flag,timeout in (('startup-1','--smoke-test',30),('startup-2','--smoke-test',30),
-                         ('full-auto','--full-auto-smoke-test',90),('session','--session-smoke-test',100),('expanded','--expanded-session-smoke-test',120),('benchmark','--benchmark-smoke-test',90)):
+                         ('full-auto','--full-auto-smoke-test',90),('session','--session-smoke-test',100),('expanded','--expanded-session-smoke-test',120),('benchmark','--benchmark-smoke-test',120)):
     run=subprocess.run([str(exe),flag,'--data-dir',str(output/name)],capture_output=True,timeout=timeout)
     exits.append(run.returncode)
     assert run.returncode==0,(name,'Actual Windows process exit',run.returncode,run.stderr[:400])
@@ -35,7 +35,7 @@ assert all(g['source_kind']=='SIMULATED' for s in report['sessions'] for g in s[
 standard=json.loads((output/'session/session-smoke.json').read_text(encoding='utf-8'))
 expanded=json.loads((output/'expanded/session-smoke.json').read_text(encoding='utf-8'))
 benchmark=json.loads((output/'benchmark/benchmark-smoke.json').read_text(encoding='utf-8'))
-assert benchmark['passed'] and benchmark['requests']==48 and benchmark['fixed_rate']==2 and benchmark['minimum_recorded_wire_gap_ms']>=500
+assert benchmark['passed'] and benchmark['requests']>48 and benchmark['fixed_rate']==2 and benchmark['duration_seconds']>=59.99 and benchmark['minimum_recorded_wire_gap_ms']>=500
 assert expanded['passed'] and len(expanded['scheduled_pids'])==36 and expanded['stored_017a_raw_frames']>=2
 assert expanded['adapter_disconnected'] and expanded['automatic_bundle_verified'] and expanded['monitoring_errors']==0
 assert standard['passed'] and standard['primary_actions']==['Connect','Start Session','Finish Session']
