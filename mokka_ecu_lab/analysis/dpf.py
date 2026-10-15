@@ -46,7 +46,16 @@ def dynamic_statistics(points):
         correlations[name]=dict(n=len(x),coverage_fraction=len(x)/len(points) if points else 0,pearson=pearson(x,y),spearman=pearson(ranks(x),ranks(y)),
             maximum_context_age_seconds=max(ages) if ages else None,median_context_age_seconds=statistics.median(ages) if ages else None,
             interpretation='DESCRIPTIVE / NON-CAUSAL; serial samples dependent; prior asynchronous context; no pressure formula')
+    groups={}
+    for label in ('STATIONARY','MOVING','UNKNOWN'):
+        subset=[p for p in points if p['motion_group']==label]
+        groups[label]=dict(n=len(subset),correlations={name:pearson([p['AB_big_endian_HYPOTHESIS'] for p in subset if p['context'][name]['value'] is not None],[p['context'][name]['value'] for p in subset if p['context'][name]['value'] is not None]) for name in CONTEXT})
+    thermal={}
+    for label,lo,hi in (('COOLANT_BELOW_60',-100,60),('COOLANT_60_TO_80',60,80),('COOLANT_80_AND_ABOVE',80,1000)):
+        subset=[p for p in points if p['context']['coolant']['value'] is not None and lo<=p['context']['coolant']['value']<hi]
+        thermal[label]=dict(n=len(subset),raw_first_word_range=[min(p['AB_big_endian_HYPOTHESIS'] for p in subset),max(p['AB_big_endian_HYPOTHESIS'] for p in subset)] if subset else None)
     return dict(population=population,population_samples=len(points),unique_payloads=len({p['payload_hex'] for p in points}),observed_first_word_increment_gcd=math.gcd(*differences) if differences else None,
+        motion_group_descriptive=groups,coolant_context_bins=thermal,group_limit='Descriptive age-gated groups; thresholds are labels, not validated operating/health criteria. No causal model selected.',
         quantization='Observed raw-integer spacing only; no physical unit or universal resolution',
         payload_byte_ranges=[dict(byte=i,minimum=min(bytes.fromhex(p['payload_hex'])[i] for p in points),maximum=max(bytes.fromhex(p['payload_hex'])[i] for p in points),
             always_zero=all(bytes.fromhex(p['payload_hex'])[i]==0 for p in points)) for i in range(6)],correlations=correlations)

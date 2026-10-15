@@ -8,7 +8,7 @@ from mokka_ecu_lab.protocols.isotp import parse_reply
 from mokka_ecu_lab.research.evidence import read_bundle,BitmapEvidence,MAX_RECORDS,MAX_SESSIONS
 from mokka_ecu_lab.sensors import load_registry
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
-from mokka_ecu_lab.sensors.extended import UNIMPLEMENTED_STANDARD
+from mokka_ecu_lab.sensors.extended import UNIMPLEMENTED_STANDARD,basic_range
 from .phases import _write_atomic
 
 LEGACY_PIDS=LIVE_PIDS | (DISCOVERY_PIDS-EXTENSION_PIDS)
@@ -25,7 +25,7 @@ def percentile(values,q):
     return values[lo]+(values[hi]-values[lo])*(pos-lo)
 def distribution(values):
     return dict(n=len(values),**{f'p{int(q*100)}':percentile(values,q) for q in (.5,.9,.95,.99)},maximum=max(values) if values else None,
-        minimum=min(values) if values else None)
+        minimum=min(values) if values else None,mean=statistics.mean(values) if values else None)
 
 
 def symptom(record,parsed=None):
@@ -80,7 +80,7 @@ def inventory(records,identity):
             if response.header is None:continue
             key=(response.header,)+source_key(r)
             if key not in groups and len(groups)>=128:raise ValueError('Too many ECU/source inventory groups')
-            g=groups.setdefault(key,dict(bitmap=BitmapEvidence(),ledger=[],positive=Counter(),decoded=Counter()))
+            g=groups.setdefault(key,dict(bitmap=BitmapEvidence(),ledger=[],positive=Counter(),decoded=Counter(),lengths=defaultdict(Counter),ranges={}))
             if response.negative_code is not None:continue
             if parsed.errors:continue
             if pid in BITMAP_PIDS:
@@ -90,9 +90,14 @@ def inventory(records,identity):
                     transaction_id=r.get('id'),state=state,origin='RECORDED_ORIGINAL_RESPONSE'))
             else:
                 g['positive'][pid]+=1
+                g['lengths'][pid][len(response.data)]+=1
                 try:
-                    if pid in STANDARD_DIESEL:valid=any(f['state']=='AVAILABLE' for f in STANDARD_DIESEL[pid].decode(response.data))
-                    elif pid in registry:registry[pid].decode(response.data);valid=True
+                    if pid in STANDARD_DIESEL:
+                        valid=any(f['state']=='AVAILABLE' for f in STANDARD_DIESEL[pid].decode(response.data))
+                        if pid in {0x4F,0x50}:g['ranges'][pid]=response.data
+                    elif pid in registry:
+                        advertised={p for p in (0x4F,0x50) if g['bitmap'].support(p)=='SUPPORTED'}
+                        basic_range(registry[pid],response.data,g['ranges'],advertised);valid=True
                     else:valid=False
                     g['decoded'][pid]+=valid
                 except ValueError:pass
@@ -106,14 +111,14 @@ def inventory(records,identity):
             name=definition.name if definition else UNIMPLEMENTED_STANDARD.get(pid,{}).get('name',f'PID 01{pid:02X} — definition not verified')
             implemented=definition is not None;count=g['positive'][pid]
             facts=[f'ADVERTISED {support}' if support=='SUPPORTED' else support]
-            if implemented:facts.append('DECODER VERIFIED / synthetic definition tests; vehicle unverified')
+            if implemented:facts.append('DEFINITION IMPLEMENTED / synthetic tests; observed layout and vehicle accuracy separate')
             elif pid in UNIMPLEMENTED_STANDARD and UNIMPLEMENTED_STANDARD[pid]['edition']:facts.append('DOCUMENTED BUT UNIMPLEMENTED')
             else:facts.append('DEFINITION UNVERIFIED')
             if count:facts.append('RESPONSE OBSERVED')
             if count and not g['decoded'][pid]:facts.append('RAW ONLY / LAYOUT UNVERIFIED')
             rows.append(dict(pid=f'{pid:02X}',request=f'01{pid:02X}',name=name,advertised_support=support,
                 decoder_implemented=implemented,live_allowlisted=pid in LIVE_PIDS|DISCOVERY_PIDS,legacy_scope=pid in LEGACY_PIDS,
-                response_observed=count,valid_numeric_responses=g['decoded'][pid],facts=facts,
+                response_observed=count,valid_numeric_responses=g['decoded'][pid],positive_payload_lengths=dict(g['lengths'][pid]),facts=facts,
                 confidence='Independent vehicle accuracy UNVERIFIED',priority='CURRENT DOCUMENTED MEASUREMENT' if implemented else 'OFFLINE RESEARCH ONLY',
                 reason=UNIMPLEMENTED_STANDARD.get(pid,{}).get('reason','A support bit is not a valid positive reply; current same-ECU gates apply')))
         output.append(dict(evidence_id=identity,ecu=key[0],mode=key[1],source_kind=key[2],context_id=key[3],
@@ -169,7 +174,8 @@ def analyze_obd(paths):
     sessions=[]
     for path in paths:
         identity,members=read_bundle(path);records=strict_records(members)
-        sessions.append(dict(evidence_id=identity,checksum_verified=True,inventory=inventory(records,identity),performance=performance(records,identity)))
+        from .benchmark import benchmark_summary
+        sessions.append(dict(evidence_id=identity,checksum_verified=True,inventory=inventory(records,identity),performance=performance(records,identity),benchmark=benchmark_summary(records,members,identity)))
     histories=defaultdict(list);comparisons=[]
     for s in sessions:
         for g in s['inventory']:histories[(g['ecu'],g['mode'],g['source_kind'])].append(g)
@@ -184,15 +190,19 @@ def analyze_obd(paths):
                 unchanged_advertised_ids=sorted(old&new),order='Caller-selected bundle order, not inferred chronology',
                 identity_limit='CAN response address comparison only; exact ECU/calibration identity not established',
                 inference_limit='Missing/conflicting bitmap evidence is UNKNOWN, not evidence of lost support; traces never joined'))
-    return dict(schema_version=1,private=True,passive=True,sends_requests=False,cloud_upload=False,sessions=sessions,inventory_comparisons=comparisons,limitations=LIMITATIONS)
+    from .benchmark import compare_benchmarks
+    return dict(schema_version=1,private=True,passive=True,sends_requests=False,cloud_upload=False,sessions=sessions,inventory_comparisons=comparisons,benchmark_comparisons=compare_benchmarks(sessions),limitations=LIMITATIONS)
 
 
 def export_obd_report(report,path,inputs=()):
     target=Path(path).resolve()
     if {target.with_suffix('.html'),target.with_suffix('.json')} & {Path(p).resolve() for p in inputs}:raise ValueError('Output cannot overwrite input')
     blocks=[]
+    if report.get('benchmark_comparisons'):blocks.append('<h2>Separate benchmark comparisons</h2><pre>'+escape(json.dumps(report['benchmark_comparisons'],indent=2))+'</pre>')
     if report.get('inventory_comparisons'):blocks.append('<h2>Address/source inventory comparisons · no joined trace</h2><pre>'+escape(json.dumps(report['inventory_comparisons'],indent=2))+'</pre>')
     for session in report['sessions']:
+        if session.get('benchmark'):
+            b=session['benchmark'];blocks.append('<h2>Fixed 60-second benchmark</h2><p>'+escape(f"Run {b['run_id']} | {b['mode']} | ECU {b['ecu']} | requested {b['requested_rate']} req/s | actual {b['actual_sustained_rate']} req/s | measured {b['measurement_duration_seconds']} s | sent {b['sent_requests']} | completed {b['completed']}")+'</p><p>'+escape(b['interpretation'])+'</p><details><summary>Preflight, phase and outcome provenance</summary><pre>'+escape(json.dumps(b,indent=2))+'</pre></details>')
         for g in session['inventory']:
             blocks.append('<h2>'+escape(g['ecu']+' / '+g['mode']+' / '+g['source_kind'])+'</h2><p>'+escape(f"Declared {g['declared_count']} non-bitmap identifiers; {g['outside_legacy_scope_count']} outside legacy scope. Support is not observation.")+'</p>')
             blocks.append('<table><tr><th>Request</th><th>Definition</th><th>Support</th><th>Observed</th><th>Facts / provenance</th></tr>')
@@ -201,6 +211,10 @@ def export_obd_report(report,path,inputs=()):
                 blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (r['request'],r['name'],r['advertised_support'],r['response_observed'],'; '.join(r['facts'])))+'</tr>')
             blocks.append('</table><details><summary>Original bitmap ledger</summary><pre>'+escape(json.dumps(g['bitmap_ledger'],indent=2))+'</pre></details>')
         for g in session['performance']:
+            d=g['latency_ms'];blocks.append('<h2>Communication summary · '+escape(g['mode'])+'</h2><p>'+escape(f"Sent {g['transmitted_requests']} | observed count/span {g['actual_transmitted_rate_hz']} req/s | latency p50 {d['p50']} / p95 {d['p95']} / p99 {d['p99']} ms | spacing violations {g['hard_four_hz_spacing_violations']}")+'</p><p>'+escape(str(g['categories']))+'</p><table><tr><th>ECU/request</th><th>Sent</th><th>Latency p50 / p95 / p99 ms</th><th>Sampling mean / max s</th></tr>')
+            for r in g['per_ecu_pid']:
+                d=r['latency_ms'];gap=r['sampling_gap_seconds'];blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (r['ecu']+' / '+r['command'],r['sent_attempts'],f"{d['p50']} / {d['p95']} / {d['p99']}",f"{gap['mean']} mean / {gap['maximum']} max"))+'</tr>')
+            blocks.append('</table>')
             blocks.append('<h2>Passive OBD performance · '+escape(g['mode'])+'</h2><pre>'+escape(json.dumps(g,indent=2))+'</pre>')
     html='<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'"><title>Private OBD inventory and performance</title><style>body{font:16px system-ui;margin:2em;max-width:1200px}table{border-collapse:collapse;width:100%}td,th{padding:.5em;border:1px solid #bbb;text-align:left}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><h1>Private OBD inventory and passive performance</h1><p>'+escape(LIMITATIONS)+'</p>'+''.join(blocks)+'</body></html>'
     _write_atomic([(target.with_suffix('.json'),json.dumps(report,ensure_ascii=False,indent=2)+'\n'),(target.with_suffix('.html'),html)])
