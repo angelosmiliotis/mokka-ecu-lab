@@ -1,0 +1,208 @@
+{
+  "version": "0.2.10",
+  "source": "SIMULATED",
+  "hardware_connected": false,
+  "private_inputs_distributed": false,
+  "full_regression": {
+    "passed": 571,
+    "duration_seconds": 258.85
+  },
+  "final_compact_sidebar_regression": {
+    "passed": 19
+  },
+  "native_windows": {
+    "geometry_checks": 240,
+    "qt_pixel_ratios": [
+      1,
+      1.25,
+      1.5
+    ],
+    "resolutions": [
+      [
+        1280,
+        720
+      ],
+      [
+        1366,
+        768
+      ],
+      [
+        1536,
+        864
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "contact_sheets_visually_reviewed": 33,
+    "horizontal_page_overflow": false
+  },
+  "compiled_project_modules": {
+    "project_modules": 47,
+    "mismatches": []
+  },
+  "packaged": {
+    "actual_process_exits": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "stationary_benchmark": {
+      "passed": true,
+      "source": "SIMULATED",
+      "private_input_used": false,
+      "hardware_connected": false,
+      "requests": 115,
+      "fixed_rate": 2,
+      "duration_seconds": 60.04700000000594,
+      "preflight_separate": true,
+      "old_48_send_early_stop_absent": true,
+      "minimum_recorded_wire_gap_ms": 500.0,
+      "all_wire_gaps_at_least_250ms": true,
+      "automatic_bundle_verified": true,
+      "disconnected": true,
+      "native_geometry": [
+        {
+          "state": "benchmark-idle",
+          "physical": [
+            1280,
+            720
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-idle",
+          "physical": [
+            1366,
+            768
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-idle",
+          "physical": [
+            1536,
+            864
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-idle",
+          "physical": [
+            1920,
+            1080
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1280,
+            720
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1366,
+            768
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1536,
+            864
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-active",
+          "physical": [
+            1920,
+            1080
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1280,
+            720
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1366,
+            768
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1536,
+            864
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        },
+        {
+          "state": "benchmark-finished",
+          "physical": [
+            1920,
+            1080
+          ],
+          "scale": 1.0,
+          "horizontal_page_overflow": false
+        }
+      ],
+      "maximum_gui_tick_gap_seconds": 0.18800000000192085
+    },
+    "expanded_scheduled_pids": 36,
+    "expanded_stored_017a_raw_frames": 7,
+    "source": "SIMULATED",
+    "private_input_used": false,
+    "hardware_connected": false,
+    "startup_transactions": 11,
+    "startup_errors": 0,
+    "automatic_scheduled_pids": 21,
+    "stored_017a_raw_frames": 2,
+    "monitoring_errors": 0,
+    "closed_recording": true,
+    "worker_receipt_checksums_verified": true,
+    "standard_primary_actions": [
+      "Connect",
+      "Start Session",
+      "Finish Session"
+    ],
+    "standard_scheduled_pids": 13,
+    "standard_stored_017a_raw_frames": 7,
+    "standard_automatic_bundle_verified": true,
+    "standard_disconnected_after_export": true
+  },
+  "offline_source_executable_parity": {
+    "constructed_drive_and_benchmark_json_html_identical": true,
+    "no_acquisition": true
+  },
+  "physical_v0210_vehicle_validation": "PENDING",
+  "aggregate_requests_per_second_ceiling": 4
+}
