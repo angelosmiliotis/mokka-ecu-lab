@@ -1,5 +1,9 @@
 # Architecture
 
+v0.2.9 extends the same serialized worker and transport policy. Pure `sensors/extended.py` definitions are distinct from the immutable `EXTENSION_PIDS` scope; current ordered support and strict positive fields gate acquisition. Range selectors are cleared on new context/session and read before MAP/MAF. Normal automatic acquisition owns one recorder and one coordinator. Adaptive pacing uses bounded per-request timing baselines and updates the existing transport's rate; it never creates a second I/O worker or raises the four-request ceiling.
+
+Private `analysis/obd.py` reads checksum-verified journals offline and separates inventory, source contexts and shared wire timing. Report dialogs use analysis threads without transport references. Automatic journal closure produces a verified ZIP and fresh companion report. Stationary benchmarking is a separate Advanced operation on the same worker, requiring idle current evidence and explicit consent. Its fixed subset, original unrecorded pretest provenance, bounds, abort and disconnect are recorded. Source/executable synthetic and private analysis parity is required before release.
+
 ## v0.2.8 canonical session ownership
 
 `SessionCoordinator` belongs to the existing acquisition thread. The Session Dashboard projects its acknowledged lifecycle, with no second transport or competing acquisition state machine. Connect leaves recording/polling off after ECU confirmation. Start creates one journal before fresh bitmap/positive-response Discovery and delegates all-eligible DPF Priority capture/proof to the existing Full Auto planner. Submission and dispatch reject conflicting manual mutations. Finish interrupts waits, closes the journal first, independently verifies a fresh private bundle, then disconnects. Final exported state is persisted separately from the bundle's journal-close coordinator checkpoint.

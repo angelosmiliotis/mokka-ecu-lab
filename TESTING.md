@@ -1,5 +1,26 @@
 # Testing and vehicle validation
 
+## Version 0.2.9 software and packaged validation
+
+**525 tests passed** in the complete regression run (213.28 s). The final simulation-only benchmark driver correction was also checked with 25 targeted passing tests. New independent synthetic cases cover all 23 reviewed standard definitions, exact lengths, field flags, signed data, reserved/unknown enums, MAP/MAF range selectors, current bitmap and positive-response gates, inventory provenance, passive performance, bounded adaptive recovery, benchmark conflict/abort/deadline behavior and aggregate wire spacing. No real vehicle bytes or chronology are public fixtures.
+
+The software scope contains **45 non-bitmap Mode 01 identifiers**, including 23 reviewed additions. This is not a vehicle coverage claim. `0101`, `019D` and every OEM/UDS candidate remain excluded from live acquisition. The original adapter setup and ISO-TP framing are unchanged; one serialized worker retains the hard **4 aggregate req/s** boundary. New automatic sessions adapt only within that boundary. The separate advanced stationary benchmark defaults to 2 req/s and stops at 48 requests or 60 seconds; errors abort and disconnect.
+
+Native Windows inspection passed **276 geometry checks** at actual Qt pixel ratios 1, 1.25 and 1.5, across 1280×720, 1366×768, 1536×864 and 1920×1080: 48 expanded-session states, 48 legacy-session states, 96 main-page checks, 60 offline-view checks and 24 benchmark states. All 36 contact sheets and the full field catalog were visually reviewed. Page horizontal overflow was absent; vertical page scrolling and independent table scrolling are expected at smaller sizes/high DPI. No OS display setting was changed. Expanded sessions scheduled all 36 eligible synthetic PIDs, stored 11/13/13 six-byte RAW polling positives, reported zero monitoring errors and completed automatic verified export/disconnect. The largest GUI heartbeat gap in those three runs was 0.360 s. One deliberately incompatible numeric 017A Discovery reply is categorized as a layout mismatch, not a transport failure or overload signal.
+
+The final Windows build matches all **44 compiled project modules**, with zero source mismatches. Six actual packaged processes exited **0, 0, 0, 0, 0, 0**: two startup checks, legacy Full Auto, the original 13-PID session, expanded 36-PID session and fixed stationary benchmark. Packaged expanded acquisition stored seven six-byte RAW positives; the benchmark completed 48 requests at 2 req/s with minimum actual wire spacing 500 ms. All session bundles were verified and adapters disconnected. Source/executable offline OBD inventory/performance, DPF and evidence JSON/HTML are byte-identical for constructed input. Separate private regression also preserved its original inputs and stored every private output outside Git; none is distributed.
+
+Physical v0.2.9 ECU/adapter validation is **pending**. Historical capture agreement with an old generic decoder does not verify physical MAP/MAF scaling when advertised 014F/0150 selectors were never queried. New live interpretation requires valid current configuration when advertised. Six-byte 017A pressure, DPF regeneration, soot, ash and exact calibration remain unverified. See [scope and next field check](docs/V029_RESEARCH_PERFORMANCE.md), [synthetic screenshots](docs/screenshots/v0.2.9) and [portable synthetic results](samples/v0.2.9-validation.json).
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\verify_session.py --expanded --output-dir release\fresh-expanded-check --scale 1
+.\.venv\Scripts\python.exe scripts\verify_benchmark.py --output-dir release\fresh-benchmark-check --scale 1
+.\.venv\Scripts\python.exe scripts\verify_packaged.py --exe release\YOUR_BUILD\MokkaECULab\MokkaECULab.exe --output-dir release\fresh-packaged-check
+```
+
+Use fresh ignored output directories. All software/UI checks explicitly select simulation, never a COM port. The packaged checker verifies actual process exits, not just saved success files. Release archives contain the verified executable with `_internal`, tracked public source and SHA-256 sums; no captured bundles or reports.
+
 ## Version 0.2.8 software and packaged validation
 
 **432 tests passed** in the final complete run (163.29 s). New synthetic regressions cover the canonical single-worker session lifecycle, fresh recorded bitmap evidence, stable recording identity, duplicate/conflicting actions, successful stored RAW polling proof, automatically verified export/disconnect, export failure and explicit offline recovery, field visibility and strict offline DPF provenance. Last valid values and failed/cancelled latest queries remain separate. Recovery retains original journal bytes, including an interrupted tail; complete malformed records are rejected.

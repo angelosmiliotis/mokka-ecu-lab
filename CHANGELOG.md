@@ -1,5 +1,14 @@
 # Changes
 
+## 0.2.9 — Standard inventory and bounded OBD research/performance
+
+- Preserve the three-action automatic session, every previously eligible PID and genuine stored 017A RAW proof. Add 23 reviewed OCT2011 standard layouts in a separate fixed policy scope, with current support/positive gates and explicit candidate omissions. No new OEM/UDS request. 0101 readiness implementation and unverified 019D remain outside live scope.
+- Handle current same-ECU 014F/0150 range configuration before interpreting MAP/MAF; preserve historical originals/default-scaling caveats. Include strict VGT, oxygen and signed PM-sensor fields, availability/enum handling and meaningful status labels. PM-sensor regeneration is not DPF regeneration.
+- Private per-bundle/ECU inventory and source comparisons retain raw bitmap provenance and distinguish advertisement, definition and observation. Passive performance adds send/latency quantiles, overlapping jitter, cadence, genuine RAW counts and separate transport/framing/NRC/NO DATA/layout/cancellation categories. Timing slack is not ECU capacity.
+- One-worker adaptive pacing remains within 0.25–4 aggregate req/s, with per-request baselines, cooldown and cautious recovery. Expanded DPF Priority protects core context without starvation. No sensor-value feedback or extra probes.
+- Advanced-only stationary benchmark uses a recently verified fixed subset, explicit user-reported parked conditions, original pretest provenance and bounds of 48 requests / 60 seconds; completion/error closes, exports and disconnects without reconnect. Private companion OBD HTML/JSON is produced on automatic Finish.
+- DPF research adds load/context ages, polling-only descriptive correlations, observed integer quantization/byte ranges and scatter plots. No pressure formula, health, regeneration, soot or ash inference. All public tests and screenshots are constructed; private telemetry/reports are excluded.
+
 ## 0.2.8 — Standard automatic sessions and private RAW research
 
 - Default Session Dashboard with three primary actions: Connect verifies the configured Windows port and actual CAN ECU; Start Session records fresh session Discovery and all eligible known standard PIDs/RAW evidence with DPF Priority; Finish Session closes, automatically exports/checksum-verifies a unique private bundle, then disconnects. Start authorizes the displayed profile without individual RAW/PID checkboxes.
