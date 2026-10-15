@@ -82,5 +82,5 @@ def test_research_records_have_required_evidence_and_cannot_expand_allowlist():
     for record in records:
         assert {'sources','ecu_applicability','units','decoding_formula','expected_data_bytes','version','validation_status','contradictions','risk'}<=record.keys()
         assert record['live_enabled'] is False and record['sources'] and record['contradictions']
-    for command in ('0111','015A','0159','22D525','22D526','22D52F','22D532'):
+    for command in ('0101','019D','015A','0159','22D525','22D526','22D52F','22D532'):
         with pytest.raises(UnsafeRequest): validate_command(command,{0x11,0x5A,0x59},discovery_enabled=True,discovery_supported={0x11,0x5A,0x59})

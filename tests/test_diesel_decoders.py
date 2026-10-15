@@ -7,7 +7,7 @@ def decoded(pid,hex_payload):
     return {f['id']:f for f in STANDARD_DIESEL[pid].decode(bytes.fromhex(hex_payload))}
 
 
-@pytest.mark.parametrize('pid',STANDARD_DIESEL)
+@pytest.mark.parametrize('pid',DIESEL_PAYLOADS)
 def test_complete_documented_layout_with_evidence_and_unique_fields(pid):
     definition=STANDARD_DIESEL[pid]
     fields=definition.decode(DIESEL_PAYLOADS[pid])
@@ -17,7 +17,7 @@ def test_complete_documented_layout_with_evidence_and_unique_fields(pid):
     assert all(f['verification']=='STANDARD_DOCUMENTED' and f['formula'] and f['validity'] for f in fields)
 
 
-@pytest.mark.parametrize('pid',STANDARD_DIESEL)
+@pytest.mark.parametrize('pid',DIESEL_PAYLOADS)
 @pytest.mark.parametrize('delta',[-1,1])
 def test_incomplete_or_different_revision_never_fabricates_fields(pid,delta):
     p=DIESEL_PAYLOADS[pid]

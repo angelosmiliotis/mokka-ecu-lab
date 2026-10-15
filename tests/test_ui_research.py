@@ -11,7 +11,7 @@ def test_research_import_view_and_charts_never_submit_to_worker(window,tmp_path,
     with monkeypatch.context() as patch:
         patch.setattr(window.worker,'submit',lambda *a,**k:calls.append(a))
         view=window.research_view; view.load_paths([path])
-        assert view.group.count()==2 and view.definitions.rowCount()==26
+        assert view.group.count()==2 and view.definitions.rowCount()==49
         assert 'HW: UNKNOWN' in view.profile.text()
         for i in range(view.group.count()):
             view.group.setCurrentIndex(i)
