@@ -54,6 +54,12 @@ def auto_plan(support, pages, observations, ecu, *, prepared, consent, preset=PR
                              selected=numeric, raw_selected=raw)
     weights = {p: PRIORITY.get(p, 1) if preset == PRESETS[1] else 1
                for p in validated['weights']}
+    if preset==PRESETS[1] and len(weights)>22:
+        # More definitions dilute the four-request budget. Protect context
+        # sampling without exceeding bounded weights or starving other PIDs.
+        for p in (0x0B,0x10,0x0D):
+            if p in weights:weights[p]=4
+        if 0x04 in weights:weights[0x04]=2
     return dict(ecu=ecu, preset=preset, consent=bool(consent), weights=weights,
                 raw_pids=validated['raw_pids'], omitted=omitted + validated['omitted'],
                 matrix=matrix, prepared=prepared)
@@ -135,6 +141,7 @@ class AcquisitionReceipt:
             if reading.get('ecu')!=ecu: continue
             sid=reading['sensor_id']; previous_field=fields.get(sid,{})
             fields[sid]=dict(value=reading['value'],unit=reading['unit'],timestamp=reading['timestamp'],
+                display=reading.get('display'),
                 monotonic_ns=reading['monotonic_ns'],source_kind=reading['source_kind'],
                 verification=reading['verification'],samples=previous_field.get('samples',0)+1)
         raw = next((s for s in record.get('raw_samples', [])

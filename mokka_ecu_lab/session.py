@@ -9,7 +9,7 @@ from .logging.bundle import export_research_bundle
 from .research.evidence import read_bundle
 
 CONFLICTS = frozenset({'connect','disconnect','start','stop','record','record_stop','discover',
-    'monitor_discovery','drive_capture','full_auto','retry_auto','select','priorities','rate','replay','session_connect'})
+    'monitor_discovery','drive_capture','full_auto','retry_auto','select','priorities','rate','replay','session_connect','benchmark_start','benchmark_stop'})
 
 
 class SessionCoordinator:
@@ -56,7 +56,9 @@ def export_closed_session(root, session_id):
     if metadata.get('session_coordinator') and not summary.get('acquisition_receipt'):
         raise ValueError('Automatic session acquisition receipt missing')
     if hashlib.sha256(source.read_bytes()).hexdigest()!=original: raise ValueError('Original journal changed during export')
-    return dict(bundle_path=str(target.resolve()), bundle_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+    from .analysis.obd import analyze_obd,export_obd_report
+    report_path=export_obd_report(analyze_obd([target]),target.with_suffix('.html'),[target])
+    return dict(obd_report_path=str(report_path),bundle_path=str(target.resolve()), bundle_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
         verified_evidence_id=identity, original_journal_sha256=original, checksums_verified=True,
         recorded_mode=summary['mode'],recorded_ecus=json.loads(members.get('ecu-identifiers.json',b'[]')),
         exported_acquisition_receipt=summary.get('acquisition_receipt'))
@@ -71,6 +73,7 @@ def recover_interrupted_session(root, session_id):
     import base64
     from .protocols.isotp import parse_reply
     from .sensors import load_registry
+    from .sensors.extended import basic_range
     from .sensors.diesel import STANDARD_DIESEL
     from .research.evidence import MAX_RECORDS, MAX_MEMBER
     root=Path(root); session=next((s for s in list_sessions(root) if s['id']==session_id),None)
@@ -88,7 +91,7 @@ def recover_interrupted_session(root, session_id):
                 raise ValueError('Malformed complete journal line; original preserved')
             if record.get('session_id')!=session_id: raise ValueError('Recovery journal session mismatch')
             if record.get('record_type')=='transaction': records.append(record)
-    db=connect_database(root); registry=load_registry(); repaired=0
+    db=connect_database(root); registry=load_registry(); repaired=0;ranges={}
     try:
         for r in records:
             if not r.get('pid') or r.get('raw_only'): continue
@@ -97,7 +100,10 @@ def recover_interrupted_session(root, session_id):
             for reply in parse_reply(base64.b64decode(r['raw_b64'],validate=True),pid,r['command']).responses:
                 if reply.negative_code is not None: continue
                 try:
-                    fields=STANDARD_DIESEL[pid].decode(reply.data) if pid in STANDARD_DIESEL else [dict(sensor_id=registry[pid].id,value=registry[pid].decode(reply.data),unit=registry[pid].unit,state='AVAILABLE',verification='STANDARD_VERIFIED')]
+                    if pid in STANDARD_DIESEL:
+                        fields=STANDARD_DIESEL[pid].decode(reply.data)
+                        if pid in {0x4F,0x50}:ranges.setdefault(reply.header,{})[pid]=reply.data
+                    else:fields=[dict(sensor_id=registry[pid].id,value=basic_range(registry[pid],reply.data,ranges.get(reply.header,{})),unit=registry[pid].unit,state='AVAILABLE',verification='STANDARD_VERIFIED')]
                 except ValueError: continue
                 for f in fields:
                     if f['state']!='AVAILABLE': continue

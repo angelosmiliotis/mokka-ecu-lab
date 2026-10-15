@@ -8,8 +8,12 @@ def main():
     parser.add_argument("--smoke-test", action="store_true", help="Offline UI test; never connects to hardware")
     parser.add_argument('--full-auto-smoke-test',action='store_true',help='Explicit synthetic Windows GUI Full Auto validation; never hardware')
     parser.add_argument('--session-smoke-test',action='store_true',help='Synthetic Connect → Start Session → Finish Session GUI validation; never hardware')
+    parser.add_argument('--expanded-session-smoke-test',action='store_true',help='Constructed extended standard session GUI validation; never hardware')
+    parser.add_argument('--benchmark-smoke-test',action='store_true',help='Constructed Advanced stationary benchmark GUI validation; never hardware')
     parser.add_argument('--dpf-bundles',nargs='+',type=Path,help='Private offline DPF RAW evolution; starts no GUI or transport')
     parser.add_argument('--dpf-output',type=Path,help='Fresh private DPF HTML / JSON report path')
+    parser.add_argument('--obd-bundles',nargs='+',type=Path,help='Private passive inventory/performance analysis; no transport')
+    parser.add_argument('--obd-output',type=Path,help='Fresh private OBD HTML / JSON report path')
     parser.add_argument('--analyze-bundles',nargs='+',type=Path,help='Offline local Research Bundle analysis; starts no GUI or transport')
     parser.add_argument('--research-output',type=Path,help='Separate private JSON analysis destination')
     parser.add_argument('--research-html',type=Path,help='Optional self-contained private HTML report; no network resources')
@@ -18,10 +22,16 @@ def main():
     parser.add_argument('--phase-annotations',type=Path,help='Private USER_REPORTED annotation sidecar')
     parser.add_argument('--phase-output',type=Path,help='Fresh private HTML / JSON comparison base path')
     args = parser.parse_args()
-    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles))>1:
+    session_validation_requested=args.session_smoke_test or args.expanded_session_smoke_test
+    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.expanded_session_smoke_test,args.benchmark_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles,args.obd_bundles))>1:
         parser.error('Choose one validation / offline analysis mode')
-    if (args.smoke_test or args.full_auto_smoke_test or args.session_smoke_test) and args.data_dir.exists():
+    if (args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test) and args.data_dir.exists():
         parser.error('Synthetic validation requires a fresh --data-dir; existing user data is preserved')
+    if args.obd_bundles:
+        if not args.obd_output:parser.error('--obd-output required with --obd-bundles')
+        from mokka_ecu_lab.analysis.obd import analyze_obd,export_obd_report
+        export_obd_report(analyze_obd(args.obd_bundles),args.obd_output,args.obd_bundles);return 0
+    if args.obd_output:parser.error('--obd-output requires --obd-bundles')
     if args.dpf_bundles:
         if not args.dpf_output: parser.error('--dpf-output is required with --dpf-bundles')
         from mokka_ecu_lab.analysis.dpf import analyze_dpf,export_dpf_report
@@ -58,10 +68,13 @@ def main():
     from mokka_ecu_lab.ui.window import MainWindow
     app = QApplication([])
     app.setApplicationName("Mokka ECU Lab")
-    window = MainWindow(args.data_dir,validation=bool(args.smoke_test or args.full_auto_smoke_test or args.session_smoke_test)); window.show()
-    if args.session_smoke_test:
+    window = MainWindow(args.data_dir,validation=bool(args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test)); window.show()
+    if args.benchmark_smoke_test:
+        from mokka_ecu_lab.ui.benchmark_validation import install_benchmark_validation
+        benchmark_timer,benchmark_cleanup=install_benchmark_validation(window,app,args.data_dir)
+    if session_validation_requested:
         from mokka_ecu_lab.ui.session_validation import install_session_validation
-        session_timer,session_cleanup=install_session_validation(window,app,args.data_dir)
+        session_timer,session_cleanup=install_session_validation(window,app,args.data_dir,expanded=args.expanded_session_smoke_test)
     if args.full_auto_smoke_test:
         import json,time
         from mokka_ecu_lab.logging.bundle import export_research_bundle
@@ -106,7 +119,8 @@ def main():
         QTimer.singleShot(6500, lambda: window.send("record_stop"))
         QTimer.singleShot(7200, window.close)
     result=app.exec()
-    if args.session_smoke_test: session_cleanup()
+    if session_validation_requested: session_cleanup()
+    if args.benchmark_smoke_test:benchmark_cleanup()
     if args.full_auto_smoke_test:
         # The recurring validation callback retains the window in a closure.
         # Destroy its widgets while QApplication still exists, rather than
