@@ -9,7 +9,7 @@ from .logging.bundle import export_research_bundle
 from .research.evidence import read_bundle
 
 CONFLICTS = frozenset({'connect','disconnect','start','stop','record','record_stop','discover',
-    'monitor_discovery','drive_capture','full_auto','retry_auto','select','priorities','rate','replay','session_connect','benchmark_start','benchmark_stop'})
+    'monitor_discovery','drive_capture','full_auto','retry_auto','select','priorities','rate','replay','session_connect','benchmark_start','benchmark_stop','bench_auto_start','bench_auto_stop'})
 
 
 class SessionCoordinator:

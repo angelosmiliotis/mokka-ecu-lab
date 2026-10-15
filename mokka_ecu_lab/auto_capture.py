@@ -4,7 +4,8 @@ from .capture import capture_plan
 from .protocols import LIVE_PIDS, DISCOVERY_PIDS, support_state
 from .layouts import RAW_ONLY_PIDS, raw_eligibility
 
-PRESETS = ('Comprehensive / All supported sensors', 'DPF Research Priority')
+PRESETS = ('Comprehensive / All supported sensors', 'DPF Research Priority', 'DPF + Turbo / Critical subset')
+CRITICAL_PIDS=frozenset({0x04,0x05,0x0B,0x0C,0x0D,0x10,0x11,0x23,0x2C,0x2D,0x49,0x71,0x7A})
 ALL_SENSOR_PIDS = LIVE_PIDS | DISCOVERY_PIDS
 PRIORITY = {0x7A: 4, 0x0C: 3, 0x0D: 2, 0x0B: 2, 0x10: 2, 0x05: 2}
 
@@ -42,6 +43,10 @@ def auto_plan(support, pages, observations, ecu, *, prepared, consent, preset=PR
                 reason = 'Preset RAW consent not given'
         else:
             reason = sample.get('error') or 'No strictly valid positive Discovery sample'
+        if not reason and preset==PRESETS[2] and pid not in CRITICAL_PIDS:
+            reason='Omitted by explicit DPF + Turbo critical-subset profile'
+            if pid in numeric:numeric.remove(pid)
+            if pid in raw:raw.remove(pid)
         if reason:
             omitted.append(dict(pid=f'{pid:02X}', reason=reason))
         matrix.append(dict(pid=f'{pid:02X}', support=state,
@@ -60,6 +65,8 @@ def auto_plan(support, pages, observations, ecu, *, prepared, consent, preset=PR
         for p in (0x0B,0x10,0x0D):
             if p in weights:weights[p]=4
         if 0x04 in weights:weights[0x04]=2
+    if preset==PRESETS[2]:
+        weights={p:4 if p in {0x7A,0x71,0x0B,0x10,0x0C} else 2 if p in {0x04,0x0D} else 1 for p in weights}
     return dict(ecu=ecu, preset=preset, consent=bool(consent), weights=weights,
                 raw_pids=validated['raw_pids'], omitted=omitted + validated['omitted'],
                 matrix=matrix, prepared=prepared)
