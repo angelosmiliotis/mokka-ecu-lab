@@ -15,6 +15,7 @@ from mokka_ecu_lab.discovery import discovery_report
 from mokka_ecu_lab.sensors import load_registry
 from mokka_ecu_lab.sensors.extended import basic_range
 from .pacing import AdaptivePacing, StationaryBenchmark
+from .benchmark import AutoBenchmark, BenchmarkWorkflow
 from mokka_ecu_lab.logging import Recorder, utc_now
 from mokka_ecu_lab.replay import Replay
 from .scheduling import PollScheduler
@@ -24,7 +25,7 @@ from mokka_ecu_lab.auto_capture import auto_plan, AcquisitionReceipt, PRESETS, a
 from mokka_ecu_lab import __version__
 from mokka_ecu_lab.session import SessionCoordinator, CONFLICTS, export_closed_session, recover_interrupted_session
 
-class AcquisitionWorker(threading.Thread):
+class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
     def __init__(self, root: Path):
         super().__init__(name="serialized-obd-worker", daemon=False)
         self.root = root
@@ -89,13 +90,14 @@ class AcquisitionWorker(threading.Thread):
                 except queue.Full: pass
 
     def submit(self, action, **kwargs):
-        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','shutdown'}:
+        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown'}:
             self.emit('notice','Stationary benchmark owns acquisition; stop it first');return False
         if self.session.active and action in CONFLICTS:
             self.emit('session_rejected', 'Automatic session owns acquisition; Finish Session first')
             return False
         if action in {'session_finish','shutdown'}: self.session.finish_requested=True
-        if action=='benchmark_stop':self.stop_io.set()
+        if action in {'benchmark_stop','bench_auto_stop'}:self.stop_io.set()
+        if action=='bench_auto_start':self.stop_io.clear()
         if action=='marker':
             token=uuid.uuid4().hex
             recorder=self.recorder
@@ -120,6 +122,10 @@ class AcquisitionWorker(threading.Thread):
         raw, error, status, readings, parsed, rejections = b"", "", "OK", [], [], []
         protocol_errors, discovery_samples = [], []
         try:
+            if isinstance(self.benchmark,AutoBenchmark):
+                deadline=self.benchmark.preflight_deadline if self.benchmark.started is None else self.benchmark.started+60
+                self.transport.operation_deadline_ns=int(deadline*1e9)
+                if time.monotonic()>=deadline:raise Cancelled('Benchmark phase monotonic deadline')
             raw = self.transport.exchange(command, self.stop_io,timeout=timeout)
             if command.startswith("01"):
                 pid = int(command[2:], 16)
@@ -199,6 +205,9 @@ class AcquisitionWorker(threading.Thread):
             "protocol_errors": protocol_errors, "discovery_samples": discovery_samples,
             "verification": [r["verification"] for r in readings], "error": error}
         record.update(application_version=__version__,decoder_version=DECODER_VERSION)
+        if isinstance(self.benchmark,AutoBenchmark):
+            record.update(benchmark_run_id=self.benchmark.session_id,benchmark_phase='MEASUREMENT' if self.benchmark.started is not None else 'PREFLIGHT',benchmark_requested_rate=self.benchmark.rate,benchmark_ecu=self.benchmark.ecu)
+            if self.benchmark.started is not None and not record['sent'] and not self.stop_io.is_set() and time.monotonic()>=self.benchmark.started+60:record['benchmark_phase']='WINDOW_END_UNSENT'
         record['range_configuration']={ecu:{f'{pid:02X}':value.hex(' ').upper() for pid,value in ranges.items()} for ecu,ranges in self.range_configuration.items()}
         record.update(effective_request_rate_hz=self.transport.rate,policy_ceiling_hz=min(4.,self.rate),
             pacing_mode='FIXED_STATIONARY_BENCHMARK' if self.benchmark and self.benchmark.active else 'ADAPTIVE' if self.session.active and self.capture_mode else 'FIXED_POLICY')
@@ -232,6 +241,12 @@ class AcquisitionWorker(threading.Thread):
         if self.session.active and not self.auto_starting:
             self.publish_session()
         self.emit("transaction", (record, readings))
+        if isinstance(self.benchmark,AutoBenchmark):
+            if self.benchmark.started is None:
+                from mokka_ecu_lab.analysis.obd import symptom
+                if status!='OK':raise ValueError(symptom(record)+': '+error)
+                if record['latency_ms']>1000:raise ValueError('EXCESSIVE_LATENCY: preflight response exceeded 1000 ms')
+            return record # Already journaled; coordinator classifies/counts even failed measurement sends.
         if status == "TRANSPORT_ERROR":
             raise TransportError(error, raw)
         if status == "CANCELLED": raise Cancelled(error, raw)
@@ -347,6 +362,7 @@ class AcquisitionWorker(threading.Thread):
         self.transport.rate=rate;self.save_capture_evidence();self.emit('benchmark',self.benchmark.snapshot())
 
     def finish_benchmark(self,reason=None):
+        if isinstance(self.benchmark,AutoBenchmark):return self.end_auto_benchmark(reason or 'INTENTIONAL_STOP: Stop & save')
         if not self.benchmark:return
         self.benchmark.active=False
         if reason:self.benchmark.reason=reason
@@ -358,6 +374,7 @@ class AcquisitionWorker(threading.Thread):
         result.update(active=False,disconnected=True);self.emit('benchmark',result);self.benchmark=None
 
     def benchmark_tick(self):
+        if isinstance(self.benchmark,AutoBenchmark):return self.auto_benchmark_tick()
         pid=self.benchmark.next_pid(time.monotonic())
         if pid is None:return self.finish_benchmark('Fixed benchmark completed at request/time bound')
         remaining=self.benchmark.maximum_seconds-(time.monotonic()-self.benchmark.started)-1/self.benchmark.rate
@@ -807,7 +824,9 @@ class AcquisitionWorker(threading.Thread):
         self.session.begin(); self.publish_session(True)
         self.session_internal=True
         try:
-            self.full_auto(dict(options,reuse=True,consent=True,preset=PRESETS[1],
+            profile=options.get('profile',PRESETS[1])
+            if profile not in {PRESETS[1],PRESETS[2]}:raise ValueError('Unknown normal session profile')
+            self.full_auto(dict(options,reuse=True,consent=True,preset=profile,
                 ecu=self.session.data['ecu'],session_recording=True))
             self.auto_receipt.data['consent_provenance']='EXPLICIT_START_SESSION_FIXED_READ_ONLY_PROFILE'
             self.auto_receipt.data['pre_connect_initialization_recorded']=False
@@ -870,11 +889,17 @@ class AcquisitionWorker(threading.Thread):
         self.persist_closed_coordinator()
 
     def handle(self, action, options):
-        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','shutdown'}:
+        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown'}:
             self.emit('notice','Stationary benchmark owns acquisition; stop it first');return
         if self.session.active and action in CONFLICTS and not self.session_internal:
             self.emit('session_rejected','Automatic session owns acquisition; Finish Session first'); return
-        if action=='benchmark_start':
+        if action=='bench_auto_start':
+            try:self.begin_auto_benchmark(options)
+            except ValueError as exc:self.emit('benchmark_rejected',str(exc));self.emit('notice',str(exc))
+        elif action=='bench_auto_stop':
+            if isinstance(self.benchmark,AutoBenchmark):self.end_auto_benchmark('INTENTIONAL_STOP: Stop & save')
+        elif action=='bench_export_retry':self.retry_benchmark_export(options.get('session_id'))
+        elif action=='benchmark_start':
             try:self.start_benchmark(options)
             except ValueError as exc:
                 self.emit('notice','Benchmark rejected: '+str(exc));self.emit('benchmark',dict(active=False,reason='Rejected: '+str(exc)))
