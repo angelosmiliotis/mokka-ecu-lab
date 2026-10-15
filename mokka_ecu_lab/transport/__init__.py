@@ -46,8 +46,15 @@ class SafeTransport:
         while True:
             remaining_ns=deadline_ns-time.monotonic_ns()
             if stop.is_set(): raise Cancelled('Stopped before send')
+            operation_deadline=getattr(self,'operation_deadline_ns',None)
+            if operation_deadline is not None and time.monotonic_ns()>=operation_deadline:raise Cancelled('Operation deadline before send')
             if remaining_ns<=0: break
-            if stop.wait(remaining_ns/1e9): raise Cancelled('Stopped before send')
+            wait_ns=min(remaining_ns,operation_deadline-time.monotonic_ns()) if operation_deadline is not None else remaining_ns
+            if stop.wait(max(0,wait_ns)/1e9): raise Cancelled('Stopped before send')
+        if operation_deadline is not None:
+            remaining=(operation_deadline-time.monotonic_ns())/1e9
+            if remaining<=0:raise Cancelled('Operation deadline before send')
+            timeout=min(timeout,remaining)
         self.last_wire_ns = time.monotonic_ns()
         self._last_send_ns = self.last_wire_ns
         self.last_send = self.last_wire_ns / 1e9
