@@ -1,5 +1,6 @@
 """Deterministic early Windows wake-up; no serial device or recorded trace."""
 from mokka_ecu_lab.transport import SafeTransport
+import pytest
 
 
 def test_early_timeout_is_rechecked_until_actual_monotonic_send_deadline(monkeypatch):
@@ -45,3 +46,17 @@ def test_reduced_adaptive_rate_changes_next_deadline_after_early_wait(monkeypatc
     assert second-first>=500_000_000
     transport.rate=.25;transport.exchange('ATE0',Early())
     assert transport.last_wire_ns-second>=4_000_000_000
+
+
+def test_operation_window_can_expire_during_early_rate_wait_without_send(monkeypatch):
+    from mokka_ecu_lab.transport import Cancelled
+    clock=[1_000_000_000];sent=[]
+    class Early:
+        def is_set(self):return False
+        def wait(self,seconds):clock[0]+=max(1,int(seconds*1e9*.5));return False
+    class Probe(SafeTransport):
+        def _exchange(self,*_):sent.append(self.last_wire_ns);return b'OK\r>'
+    monkeypatch.setattr('mokka_ecu_lab.transport.time.monotonic_ns',lambda:clock[0])
+    t=Probe();t.exchange('ATE0',Early());t.operation_deadline_ns=clock[0]+200_000_000
+    with pytest.raises(Cancelled,match='deadline'):t.exchange('ATE0',Early())
+    assert len(sent)==1 and t.last_wire_ns is None

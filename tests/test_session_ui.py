@@ -15,7 +15,7 @@ def test_default_home_has_only_three_primary_actions_and_no_hidden_manual_start(
         assert not ui.session_panel.connect.isEnabled() and not ui.session_panel.start.isEnabled()
         ui.worker.events.put(('session_state',dict(state='CONNECTED',reason='Synthetic ECU acknowledged',active=False,mode='SIMULATED',port='SIMULATED',ecu='7E8',source_kind='SIMULATED')))
         ui.drain(); ui.session_panel.start.click()
-        assert calls[-1]==(('session_start',),dict(simulation=True))
+        assert calls[-1]==(('session_start',),dict(simulation=True,profile='DPF Research Priority'))
         assert not ui.auto_consent.isChecked() and not ui.session_panel.start.isEnabled()
         ui.worker.events.put(('session_state',dict(state='CAPTURING',reason='Worker acknowledged',active=True,session_id='synthetic',mode='SIMULATED',ecu='7E8',recording_active=True)))
         ui.drain(); count=len(calls)

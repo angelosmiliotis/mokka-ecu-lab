@@ -8,7 +8,7 @@ def test_ui_offline_and_shutdown(tmp_path,qt_app):
     window = MainWindow(tmp_path,validation=True)
     try:
         app.processEvents(); window.drain()
-        assert window.tabs.count() == 8 and window.tabs.currentIndex()==7
+        assert window.tabs.count() == 9 and window.tabs.currentIndex()==7
         assert window.source.currentText() == 'Simulation'
         assert window.port.findData('COM4') >= 0
         window.port.setEditText('COM19')

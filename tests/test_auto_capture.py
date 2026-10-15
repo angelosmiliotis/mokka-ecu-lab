@@ -59,7 +59,7 @@ def test_fair_schedule_has_no_starvation_or_duplicate_requests(preset):
     calls=[scheduler.next(plan['weights'],plan['weights'],allow_discovery=True) for _ in range(n*10)]
     assert all(calls.count(pid)==weight*10 for pid,weight in plan['weights'].items())
     assert all(pid in calls[i:i+2*n] for i in range(0,len(calls)-2*n,n) for pid in plan['weights'])
-    assert plan['weights'].get(0x7A)==(4 if preset==PRESETS[1] else 1)
+    assert plan['weights'].get(0x7A)==(4 if preset in PRESETS[1:] else 1)
 
 
 def proof_receipt():
