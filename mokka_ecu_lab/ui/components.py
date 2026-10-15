@@ -1,7 +1,7 @@
 """Small reusable presentation widgets; none owns acquisition or transport."""
 from PySide6.QtCore import Qt, QRect, QSize
 from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea, QLayout
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut,QIcon
 from .theme import icon, METRICS
 from .presentation import StepState, STEP_LABELS
 
@@ -70,7 +70,7 @@ class FlowLayout(QLayout):
 
 
 class Sidebar(QWidget):
-    ORDER = ((7, 'Session Dashboard', 'dashboard'), (0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
+    ORDER = ((7, 'Session Dashboard', 'dashboard'), (8, 'Benchmark', 'discovery'), (0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
              (1, 'Sessions', 'sessions'), (3, 'Sensor Explorer', 'explorer'), (2, 'Raw Data', 'raw'),
              (5, 'Discovery', 'discovery'), (4, 'Research', 'research'))
 
@@ -98,8 +98,11 @@ class Sidebar(QWidget):
         for i, button in self.buttons.items(): button.setChecked(i == index)
 
     def set_compact(self, compact):
-        self.compact = compact; self.setFixedWidth(METRICS['compact_sidebar'] if compact else METRICS['sidebar'])
-        for index, label, _ in self.ORDER: self.buttons[index].setText('' if compact else self.tabs.tabText(index))
+        self.compact = compact; self.setFixedWidth(max(100,METRICS['compact_sidebar']) if compact else METRICS['sidebar'])
+        for index, label, symbol in self.ORDER:
+            self.buttons[index].setText(('Benchmark' if index==8 else 'Session' if index==7 else '') if compact else self.tabs.tabText(index))
+            self.buttons[index].setIcon(QIcon() if compact and index==8 else icon(symbol))
+            self.buttons[index].setStyleSheet('padding-left: 4px; padding-right: 4px;' if compact and index==8 else '')
         for label in self.group_labels: label.setVisible(not compact)
         self.local.setVisible(not compact)
 

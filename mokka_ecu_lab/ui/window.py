@@ -31,6 +31,7 @@ from mokka_ecu_lab.analysis.trends import load_trends
 from .trends import TrendsDialog
 from .research import ResearchView
 from .session import SessionPanel
+from .benchmark import BenchmarkPanel
 from mokka_ecu_lab.session import CONFLICTS
 from .theme import stylesheet, style_table, style_chart, icon, COLORS
 from .components import Sidebar, SensorCard, CaptureStepper, FlowLayout, caption, page_heading, scroll_page
@@ -142,6 +143,7 @@ class MainWindow(QMainWindow):
         self.build_dashboard(); self.build_sessions(); self.build_raw(); self.build_explorer(); self.build_research()
         self.build_discovery(); self.build_capture()
         self.session_panel=SessionPanel(self); self.tabs.addTab(self.session_panel,'Session Dashboard')
+        self.benchmark_panel=BenchmarkPanel(self); self.tabs.addTab(self.benchmark_panel,'Benchmark')
         self.ensurePolished()
         for widget in self.findChildren(QWidget): widget.ensurePolished()
         # Keep the established seven page indices/API, with scrollable content.
@@ -168,7 +170,7 @@ class MainWindow(QMainWindow):
         return b
 
     def send(self, action, **kwargs):
-        if hasattr(self,'session_panel') and action in CONFLICTS-{'session_connect','rate'} and not self.session_panel.advanced.isChecked():
+        if hasattr(self,'session_panel') and action in CONFLICTS-{'session_connect','rate','bench_auto_start','bench_auto_stop'} and not self.session_panel.advanced.isChecked():
             self.notice('Manual acquisition is available only in Advanced / Developer. Use Connect → Start Session → Finish Session.'); return
         if hasattr(self,'session_panel') and (self.session_panel.snapshot.get('active') or 'session_start' in self.pending_actions) and action in CONFLICTS:
             self.notice('Automatic session owns acquisition; Finish Session first'); return
@@ -1344,7 +1346,8 @@ class MainWindow(QMainWindow):
             try: kind, value = self.worker.events.get_nowait()
             except queue.Empty: break
             if kind == "notice": self.notice(value)
-            elif kind=='benchmark':self.benchmark_state=value;self.session_panel.update()
+            elif kind=='benchmark':self.benchmark_state=value;self.session_panel.update();self.benchmark_panel.acknowledge(value)
+            elif kind=='benchmark_rejected':self.benchmark_panel.reject(value)
             elif kind=='session_state': self.session_panel.acknowledge(value)
             elif kind=='session_rejected':
                 self.notice(value)
@@ -1519,6 +1522,7 @@ class MainWindow(QMainWindow):
         self.record_button.setEnabled(not self.recording_id)
         self.record_stop_button.setEnabled(bool(self.recording_id))
         self.session_panel.update()
+        if hasattr(self,'benchmark_panel'):self.benchmark_panel.update()
         self.refresh_presentation()
 
     def arrange_cards(self):

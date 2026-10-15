@@ -24,6 +24,8 @@ class SessionPanel(QWidget):
         self.finish=window.button('Finish Session',lambda:window.send('session_finish'),'stop')
         for button in (self.connect,self.start,self.finish): button.setMinimumHeight(44); row.addWidget(button)
         layout.addLayout(row)
+        self.profile=QComboBox();self.profile.addItem('Comprehensive · all eligible sensors','DPF Research Priority');self.profile.addItem('DPF + Turbo · critical subset only','DPF + Turbo / Critical subset');self.profile.setAccessibleName('Optional pre-drive sampling profile');layout.addWidget(self.profile)
+        layout.addWidget(caption('Default includes every eligible PID. Optional critical subset improves cadence within the same 4 req/s budget; no fast turbo-response claim. Select while parked.'))
         layout.addWidget(caption('Start Session authorizes the fixed READ-ONLY research profile: all eligible standard sensors, eligible RAW-only 017A/0188, DPF Priority, ≤4 total req/s. No individual selection or additional consent step.'))
         self.state=QLabel(); self.state.setWordWrap(True); layout.addWidget(self.state)
         self.metrics=QLabel(); self.metrics.setWordWrap(True); layout.addWidget(self.metrics)
@@ -72,7 +74,7 @@ class SessionPanel(QWidget):
             baud=115200,scenario=w.scenario.currentText(),ecu=w.source_key())
 
     def start_action(self):
-        self.window.send('session_start',simulation=self.window.source.currentIndex()==0)
+        self.window.send('session_start',simulation=self.window.source.currentIndex()==0,profile=self.profile.currentData())
 
     def acknowledge(self,data):
         self.snapshot=data
@@ -97,7 +99,8 @@ class SessionPanel(QWidget):
         self.finish.setEnabled(active and not pending and state!='FINALIZING')
         self.advanced.setEnabled(not active and not pending)
         developer=self.advanced.isChecked() and not active and not pending
-        self.benchmark_group.setVisible(developer)
+        self.profile.setEnabled(not active and not pending and not getattr(w,'benchmark_state',{}).get('active'))
+        self.benchmark_group.setVisible(False) # Deprecated internal API; one public start path on Benchmark page.
         benchmark=getattr(w,'benchmark_state',{})
         if benchmark.get('active'):
             for button in (self.connect,self.start,self.finish,self.advanced):button.setEnabled(False)

@@ -47,7 +47,7 @@ class ObdDialog(QDialog):
         if self.report.get('inventory_comparisons'):lines.append('Separate address/source inventory comparisons:\n'+json.dumps(self.report['inventory_comparisons'],indent=2))
         self.inventory_view.setPlainText('\n\n'.join(lines))
         perf=[p for p in session['performance'] if (p['mode'],p['source_kind'],p['context_id'])==(g['mode'],g['source_kind'],g['context_id'])]
-        self.performance_view.setPlainText(json.dumps(perf,indent=2)+'\n\nApplication/adapter timings and policy slack are not ECU capacity. No higher-than-four request-rate validation.')
+        self.performance_view.setPlainText(json.dumps(dict(performance=perf,benchmark=session.get('benchmark'),separate_benchmark_comparisons=self.report.get('benchmark_comparisons',[])),indent=2)+'\n\nApplication/adapter timings and policy slack are not ECU capacity. No higher-than-four request-rate validation.')
     def export(self):
         path,_=QFileDialog.getSaveFileName(self,'Fresh private OBD report','private-obd-report.html','HTML (*.html)')
         if path:
