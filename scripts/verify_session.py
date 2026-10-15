@@ -9,6 +9,7 @@ from mokka_ecu_lab.ui.session_validation import install_session_validation
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir',type=Path,required=True); parser.add_argument('--scale',type=float,default=1)
+parser.add_argument('--expanded',action='store_true',help='Constructed extended standard research profile')
 args=parser.parse_args(); out=args.output_dir.resolve()
 if out.exists(): parser.error('Choose fresh synthetic output')
 out.mkdir(parents=True); app=QApplication([]); ui=MainWindow(out/'synthetic-data',validation=True)
@@ -30,7 +31,7 @@ def observe(name,window):
             area.verticalScrollBar().setValue(area.verticalScrollBar().maximum()); app.processEvents()
             assert window.grab().save(str(out/'session-field-catalog.png')); area.verticalScrollBar().setValue(0)
         window.resize(round(1366/args.scale),round(768/args.scale)); app.processEvents()
-timer,cleanup=install_session_validation(ui,app,out/'synthetic-data',minimum_samples=3,observer=observe)
+timer,cleanup=install_session_validation(ui,app,out/'synthetic-data',minimum_samples=3,observer=observe,expanded=args.expanded)
 code=app.exec(); cleanup(); ui.deleteLater(); QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
 result=json.loads((out/'synthetic-data/session-smoke.json').read_text()); result['native_geometry']=geometry
 (out/'session-validation.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
