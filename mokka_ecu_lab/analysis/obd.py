@@ -1,0 +1,207 @@
+"""Private offline support inventory and passive performance. No transport API."""
+import base64,json,math,statistics
+from collections import Counter,defaultdict
+from html import escape
+from pathlib import Path
+from mokka_ecu_lab.protocols import BITMAP_PIDS,LIVE_PIDS,DISCOVERY_PIDS,EXTENSION_PIDS,supported_pids
+from mokka_ecu_lab.protocols.isotp import parse_reply
+from mokka_ecu_lab.research.evidence import read_bundle,BitmapEvidence,MAX_RECORDS,MAX_SESSIONS
+from mokka_ecu_lab.sensors import load_registry
+from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
+from mokka_ecu_lab.sensors.extended import UNIMPLEMENTED_STANDARD
+from .phases import _write_atomic
+
+LEGACY_PIDS=LIVE_PIDS | (DISCOVERY_PIDS-EXTENSION_PIDS)
+LIMITATIONS=('PRIVATE. Bitmap support, documented definition, response observation and valid decoding are separate facts. '
+    'Performance is application/adapter end-to-end timing, not ECU service time or maximum ECU capacity. '
+    'Functional requests share one wire budget; per-ECU replies do not multiply transmitted requests. '
+    'No extra queries, inferred retries, automatic confidence promotion or higher-rate validation.')
+
+
+def finite(value):return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0
+def percentile(values,q):
+    if not values:return None
+    values=sorted(values);pos=(len(values)-1)*q;lo=int(pos);hi=min(lo+1,len(values)-1)
+    return values[lo]+(values[hi]-values[lo])*(pos-lo)
+def distribution(values):
+    return dict(n=len(values),**{f'p{int(q*100)}':percentile(values,q) for q in (.5,.9,.95,.99)},maximum=max(values) if values else None,
+        minimum=min(values) if values else None)
+
+
+def symptom(record,parsed=None):
+    """Disjoint feedback categories; decoder mismatch never implies overload."""
+    if record.get('status')=='CANCELLED':return 'INTENTIONAL_CANCELLATION'
+    if record.get('status')=='TRANSPORT_ERROR':return 'TRANSPORT_FAILURE'
+    if record.get('status')=='INVALID' and record.get('raw_text','').strip().upper() in {'NO DATA\r>','NO DATA\n>','NO DATA >'}:return 'ECU_NO_DATA'
+    if record.get('negative_responses') or parsed and any(r.negative_code is not None for r in parsed.responses):return 'ECU_NRC'
+    errors=record.get('protocol_errors',[])
+    if parsed and parsed.errors:return 'FRAMING_OR_PROTOCOL'
+    if errors and all(e.get('category')=='DECODER_LAYOUT' for e in errors):return 'DECODER_LAYOUT'
+    if record.get('status')!='OK':return 'FRAMING_OR_PROTOCOL'
+    return 'OK'
+
+
+def strict_records(members):
+    records=[]
+    for i,line in enumerate(members['raw-redacted.jsonl'].splitlines()):
+        if i>=MAX_RECORDS:raise ValueError('Offline transaction limit exceeded')
+        r=json.loads(line)
+        if not isinstance(r,dict):raise ValueError('Invalid journal record')
+        if r.get('record_type')!='transaction':continue
+        if not isinstance(r.get('command'),str):raise ValueError('Missing command')
+        ns=r.get('monotonic_ns')
+        if not isinstance(ns,int) or isinstance(ns,bool) or ns<0:raise ValueError('Valid monotonic send timestamp required')
+        raw=base64.b64decode(r['raw_b64'],validate=True)
+        if len(raw)>65536:raise ValueError('Oversized reply')
+        command=r['command'];parsed=None
+        if len(command)==4 and command.startswith('01'):
+            pid=int(command[2:],16)
+            if r.get('pid') and int(r['pid'],16)!=pid:raise ValueError('Command/PID disagreement')
+            parsed=parse_reply(raw,pid,command)
+        records.append((r,parsed))
+    return sorted(records,key=lambda pair:pair[0]['monotonic_ns'])
+
+
+def source_key(r):
+    mode=r.get('mode','UNKNOWN');source=r.get('source_kind','UNKNOWN')
+    if not isinstance(mode,str) or not isinstance(source,str):raise ValueError('Invalid source')
+    if mode.startswith('LIVE') and source!='ECU_READING' or mode=='SIMULATED' and source!='SIMULATED':source='UNKNOWN_SOURCE_CONFLICT'
+    context=r.get('context_id','LEGACY_CONTEXT_UNAVAILABLE')
+    if not isinstance(context,str) or len(context)>256:raise ValueError('Invalid source context')
+    return mode,source,context
+
+
+def inventory(records,identity):
+    groups={};registry=load_registry();definitions={**registry,**STANDARD_DIESEL}
+    for r,parsed in records:
+        if parsed is None:continue
+        pid=int(r['command'][2:],16)
+        for response in parsed.responses:
+            if response.header is None:continue
+            key=(response.header,)+source_key(r)
+            if key not in groups and len(groups)>=128:raise ValueError('Too many ECU/source inventory groups')
+            g=groups.setdefault(key,dict(bitmap=BitmapEvidence(),ledger=[],positive=Counter(),decoded=Counter()))
+            if response.negative_code is not None:continue
+            if parsed.errors:continue
+            if pid in BITMAP_PIDS:
+                state=g['bitmap'].observe(pid,response.data)
+                if state=='BITMAP_INVALID_LENGTH':g['bitmap'].invalidate(pid)
+                g['ledger'].append(dict(request=r['command'],raw_bytes=response.data.hex(' ').upper(),ecu=key[0],mode=key[1],source_kind=key[2],timestamp=r.get('timestamp'),
+                    transaction_id=r.get('id'),state=state,origin='RECORDED_ORIGINAL_RESPONSE'))
+            else:
+                g['positive'][pid]+=1
+                try:
+                    if pid in STANDARD_DIESEL:valid=any(f['state']=='AVAILABLE' for f in STANDARD_DIESEL[pid].decode(response.data))
+                    elif pid in registry:registry[pid].decode(response.data);valid=True
+                    else:valid=False
+                    g['decoded'][pid]+=valid
+                except ValueError:pass
+    output=[]
+    for key,g in sorted(groups.items()):
+        bitmap=g['bitmap'];declared=sorted(set().union(*(supported_pids(v,p) for p,v in bitmap.accepted.items()))-BITMAP_PIDS)
+        rows=[]
+        for pid in range(1,256):
+            if pid in BITMAP_PIDS:continue
+            definition=definitions.get(pid);support=bitmap.support(pid)
+            name=definition.name if definition else UNIMPLEMENTED_STANDARD.get(pid,{}).get('name',f'PID 01{pid:02X} — definition not verified')
+            implemented=definition is not None;count=g['positive'][pid]
+            facts=[f'ADVERTISED {support}' if support=='SUPPORTED' else support]
+            if implemented:facts.append('DECODER VERIFIED / synthetic definition tests; vehicle unverified')
+            elif pid in UNIMPLEMENTED_STANDARD and UNIMPLEMENTED_STANDARD[pid]['edition']:facts.append('DOCUMENTED BUT UNIMPLEMENTED')
+            else:facts.append('DEFINITION UNVERIFIED')
+            if count:facts.append('RESPONSE OBSERVED')
+            if count and not g['decoded'][pid]:facts.append('RAW ONLY / LAYOUT UNVERIFIED')
+            rows.append(dict(pid=f'{pid:02X}',request=f'01{pid:02X}',name=name,advertised_support=support,
+                decoder_implemented=implemented,live_allowlisted=pid in LIVE_PIDS|DISCOVERY_PIDS,legacy_scope=pid in LEGACY_PIDS,
+                response_observed=count,valid_numeric_responses=g['decoded'][pid],facts=facts,
+                confidence='Independent vehicle accuracy UNVERIFIED',priority='CURRENT DOCUMENTED MEASUREMENT' if implemented else 'OFFLINE RESEARCH ONLY',
+                reason=UNIMPLEMENTED_STANDARD.get(pid,{}).get('reason','A support bit is not a valid positive reply; current same-ECU gates apply')))
+        output.append(dict(evidence_id=identity,ecu=key[0],mode=key[1],source_kind=key[2],context_id=key[3],
+            declared_measurement_status_ids=[f'{p:02X}' for p in declared],declared_count=len(declared),
+            outside_legacy_scope_count=sum(p not in LEGACY_PIDS for p in declared),
+            implemented_declared_count=sum(p in definitions for p in declared),
+            bitmap_pages=[f'{p:02X}' for p in sorted(bitmap.accepted)],bitmap_ledger=g['ledger'],
+            contradictions=bitmap.problems,rows=rows,opening_sends_requests=False))
+    return output
+
+
+def performance(records,identity):
+    scopes=defaultdict(list)
+    for r,p in records:
+        key=source_key(r)
+        if key not in scopes and len(scopes)>=128:raise ValueError('Too many performance source scopes')
+        scopes[key].append((r,p))
+    output=[]
+    for key,pairs in sorted(scopes.items()):
+        sent=[r for r,_ in pairs if r.get('sent') is True];stamps=[r['monotonic_ns'] for r in sent]
+        gaps=[(b-a)/1e6 for a,b in zip(stamps,stamps[1:])];duration=(stamps[-1]-stamps[0])/1e9 if len(stamps)>1 else None
+        categories=Counter(symptom(r,p) for r,p in pairs);lat=[r['latency_ms'] for r,_ in pairs if r.get('sent') and symptom(r)=='OK' and finite(r.get('latency_ms'))]
+        per=defaultdict(list)
+        for r,p in pairs:
+            ecus=sorted({reply.header or 'HEADERLESS' for reply in p.responses}) if p and p.responses else ['UNASSIGNED_WIRE_ATTEMPT']
+            for ecu in ecus:per[(ecu,r['command'])].append((r,p))
+        pid_rows=[]
+        for (ecu,command),part in sorted(per.items()):
+            times=[r['monotonic_ns'] for r,_ in part if r.get('sent')];cadence=[(b-a)/1e9 for a,b in zip(times,times[1:])]
+            usable=sum(bool(p and not p.errors and any((reply.header or 'HEADERLESS')==ecu and reply.negative_code is None for reply in p.responses)) for r,p in part)
+            pid_rows.append(dict(ecu=ecu,command=command,sent_attempts=sum(bool(r.get('sent')) for r,_ in part),
+                usable_framed_positive_replies=usable,positive_replies_per_second=usable/duration if duration else None,
+                recorded_numeric_decoding_replies=sum(bool(r.get('decoder')) and symptom(r,p)=='OK' for r,p in part),
+                complete_017a_raw_polling_replies=sum(bool(command=='017A' and r.get('raw_only') and p and not p.errors and any((reply.header or 'HEADERLESS')==ecu and reply.negative_code is None and len(reply.data)==6 for reply in p.responses)) for r,p in part),
+                sampling_gap_seconds=distribution(cadence),latency_ms=distribution([r['latency_ms'] for r,_ in part if r.get('sent') and finite(r.get('latency_ms')) and symptom(r,p)=='OK']),
+                categories=dict(Counter(symptom(r,p) for r,p in part)),explicit_retry_records=sum(r.get('retry') is True for r,_ in part)))
+        rolling=[statistics.pstdev(gaps[i:i+32]) for i in range(0,max(1,len(gaps)-31),8) if len(gaps[i:i+32])>=2]
+        output.append(dict(evidence_id=identity,mode=key[0],source_kind=key[1],context_id=key[2],
+            transmitted_requests=len(sent),send_span_seconds=duration,actual_transmitted_rate_hz=len(sent)/duration if duration else None,
+            interval_rate_hz=(len(sent)-1)/duration if duration else None,rate_denominator='First to last send; count/span and interval/span are both reported',
+            wire_send_gap_ms=distribution(gaps),hard_four_hz_spacing_violations=sum(g<250-1e-6 for g in gaps),latency_ms=distribution(lat),categories=dict(categories),
+            rolling_gap_jitter_ms=distribution(rolling),rolling_window_gaps=32,rolling_stride_gaps=8,explicit_retry_records=sum(r.get('retry') is True for r,_ in pairs),
+            retries_note='Only explicit retry metadata counted; repeated ordinary polling is not inferred to be retry',
+            application_latency_occupancy_proxy=sum(lat)/(duration*1000) if duration else None,
+            observed_budget_slack_ms=250-percentile(lat,.95) if lat else None,
+            headroom_note='Difference from the 250 ms policy interval; not bus utilization, ECU capacity or permission to increase rate',
+            per_ecu_pid=pid_rows))
+    return output
+
+
+def analyze_obd(paths):
+    if not 1<=len(paths)<=MAX_SESSIONS:raise ValueError('Choose one to sixteen private bundles')
+    sessions=[]
+    for path in paths:
+        identity,members=read_bundle(path);records=strict_records(members)
+        sessions.append(dict(evidence_id=identity,checksum_verified=True,inventory=inventory(records,identity),performance=performance(records,identity)))
+    histories=defaultdict(list);comparisons=[]
+    for s in sessions:
+        for g in s['inventory']:histories[(g['ecu'],g['mode'],g['source_kind'])].append(g)
+    for key,groups in sorted(histories.items()):
+        for before,after in zip(groups,groups[1:]):
+            if before['evidence_id']==after['evidence_id']:continue
+            if len(comparisons)>=256:break
+            old=set(before['declared_measurement_status_ids']);new=set(after['declared_measurement_status_ids'])
+            states={r['pid']:r['advertised_support'] for r in after['rows']}
+            comparisons.append(dict(ecu=key[0],mode=key[1],source_kind=key[2],before_evidence_id=before['evidence_id'],after_evidence_id=after['evidence_id'],
+                newly_advertised_ids=sorted(new-old),no_longer_advertised=[dict(pid=p,new_state=states[p]) for p in sorted(old-new)],
+                unchanged_advertised_ids=sorted(old&new),order='Caller-selected bundle order, not inferred chronology',
+                identity_limit='CAN response address comparison only; exact ECU/calibration identity not established',
+                inference_limit='Missing/conflicting bitmap evidence is UNKNOWN, not evidence of lost support; traces never joined'))
+    return dict(schema_version=1,private=True,passive=True,sends_requests=False,cloud_upload=False,sessions=sessions,inventory_comparisons=comparisons,limitations=LIMITATIONS)
+
+
+def export_obd_report(report,path,inputs=()):
+    target=Path(path).resolve()
+    if {target.with_suffix('.html'),target.with_suffix('.json')} & {Path(p).resolve() for p in inputs}:raise ValueError('Output cannot overwrite input')
+    blocks=[]
+    if report.get('inventory_comparisons'):blocks.append('<h2>Address/source inventory comparisons · no joined trace</h2><pre>'+escape(json.dumps(report['inventory_comparisons'],indent=2))+'</pre>')
+    for session in report['sessions']:
+        for g in session['inventory']:
+            blocks.append('<h2>'+escape(g['ecu']+' / '+g['mode']+' / '+g['source_kind'])+'</h2><p>'+escape(f"Declared {g['declared_count']} non-bitmap identifiers; {g['outside_legacy_scope_count']} outside legacy scope. Support is not observation.")+'</p>')
+            blocks.append('<table><tr><th>Request</th><th>Definition</th><th>Support</th><th>Observed</th><th>Facts / provenance</th></tr>')
+            for r in g['rows']:
+                if r['advertised_support']!='SUPPORTED' and not r['response_observed']:continue
+                blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (r['request'],r['name'],r['advertised_support'],r['response_observed'],'; '.join(r['facts'])))+'</tr>')
+            blocks.append('</table><details><summary>Original bitmap ledger</summary><pre>'+escape(json.dumps(g['bitmap_ledger'],indent=2))+'</pre></details>')
+        for g in session['performance']:
+            blocks.append('<h2>Passive OBD performance · '+escape(g['mode'])+'</h2><pre>'+escape(json.dumps(g,indent=2))+'</pre>')
+    html='<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'"><title>Private OBD inventory and performance</title><style>body{font:16px system-ui;margin:2em;max-width:1200px}table{border-collapse:collapse;width:100%}td,th{padding:.5em;border:1px solid #bbb;text-align:left}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><h1>Private OBD inventory and passive performance</h1><p>'+escape(LIMITATIONS)+'</p>'+''.join(blocks)+'</body></html>'
+    _write_atomic([(target.with_suffix('.json'),json.dumps(report,ensure_ascii=False,indent=2)+'\n'),(target.with_suffix('.html'),html)])
+    return target.with_suffix('.html')

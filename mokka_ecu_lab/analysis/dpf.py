@@ -1,5 +1,5 @@
 """Checksum-verified private RAW evolution; representations are hypotheses, never decoders."""
-import base64,json
+import base64,json,math,statistics
 from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime,timezone
@@ -14,7 +14,42 @@ LIMITATIONS=('HYPOTHESIS ONLY: byte A and unsigned AB big/little endian are raw 
     'RPM/MAF/MAP/speed/coolant are asynchronous prior samples with explicit age; no interpolation. '
     'Flow, temperature, load, sensor zero/signedness and exact ECU calibration remain confounders. '
     'Separate bundles/ECUs/source modes are never joined into one time series. Small sample counts cannot establish dynamics.')
-CONTEXT=('rpm','maf','map','speed','coolant')
+CONTEXT=('rpm','maf','map','load','speed','coolant')
+
+
+def ranks(values):
+    ordered=sorted(enumerate(values),key=lambda p:p[1]);result=[0.]*len(values);i=0
+    while i<len(ordered):
+        j=i+1
+        while j<len(ordered) and ordered[j][1]==ordered[i][1]:j+=1
+        for index,_ in ordered[i:j]:result[index]=(i+j-1)/2+1
+        i=j
+    return result
+
+
+def pearson(x,y):
+    if len(x)<3:return None
+    mx,my=statistics.mean(x),statistics.mean(y);vx=sum((v-mx)**2 for v in x);vy=sum((v-my)**2 for v in y)
+    return sum((a-mx)*(b-my) for a,b in zip(x,y))/math.sqrt(vx*vy) if vx and vy else None
+
+
+def dynamic_statistics(points):
+    polling=[p for p in points if p['raw_only_polling']]
+    population='RECORDED_RAW_ONLY_POLLING' if polling else 'COMPLETE_POSITIVE_FRAMES; no polling proof'
+    points=polling or points
+    values=sorted({p['AB_big_endian_HYPOTHESIS'] for p in points});differences=[b-a for a,b in zip(values,values[1:])]
+    correlations={}
+    for name in CONTEXT:
+        selected=[p for p in points if p['context'][name]['value'] is not None]
+        x=[p['AB_big_endian_HYPOTHESIS'] for p in selected];y=[p['context'][name]['value'] for p in selected]
+        ages=[p['context'][name]['age_seconds'] for p in selected]
+        correlations[name]=dict(n=len(x),coverage_fraction=len(x)/len(points) if points else 0,pearson=pearson(x,y),spearman=pearson(ranks(x),ranks(y)),
+            maximum_context_age_seconds=max(ages) if ages else None,median_context_age_seconds=statistics.median(ages) if ages else None,
+            interpretation='DESCRIPTIVE / NON-CAUSAL; serial samples dependent; prior asynchronous context; no pressure formula')
+    return dict(population=population,population_samples=len(points),unique_payloads=len({p['payload_hex'] for p in points}),observed_first_word_increment_gcd=math.gcd(*differences) if differences else None,
+        quantization='Observed raw-integer spacing only; no physical unit or universal resolution',
+        payload_byte_ranges=[dict(byte=i,minimum=min(bytes.fromhex(p['payload_hex'])[i] for p in points),maximum=max(bytes.fromhex(p['payload_hex'])[i] for p in points),
+            always_zero=all(bytes.fromhex(p['payload_hex'])[i]==0 for p in points)) for i in range(6)],correlations=correlations)
 
 
 def analyze_dpf(paths):
@@ -56,7 +91,7 @@ def analyze_dpf(paths):
                     prior=values[pos] if pos>=0 else None
                     age=(ns-prior['monotonic_ns'])/1e9 if prior else None
                     context[name]=dict(value=prior['value'] if prior and age<=5 else None,
-                        unit={'rpm':'rpm','maf':'g/s','map':'kPa','speed':'km/h','coolant':'°C'}[name],
+                        unit={'rpm':'rpm','maf':'g/s','map':'kPa','load':'%','speed':'km/h','coolant':'°C'}[name],
                         timestamp=prior['timestamp'] if prior else None,age_seconds=age,
                         state='PRIOR_ASYNCHRONOUS' if prior and age<=5 else 'MISSING_OR_STALE',simultaneous=False)
                 speed=context['speed']['value']; group='UNKNOWN' if speed is None else 'STATIONARY' if speed==0 else 'MOVING'
@@ -74,7 +109,8 @@ def analyze_dpf(paths):
             groups.append(dict(evidence_id=identity,ecu=key[0],mode=key[1],source_kind=key[2],sample_provenance=key[3],samples=len(values),
                 raw_only_polling_samples=sum(r['raw_only_polling'] for r in values),
                 dynamic_evidence='INSUFFICIENT_SINGLE_SAMPLE' if len(values)<2 else 'OBSERVED_RAW_EVOLUTION_ONLY',
-                statistics=statistics,points=values,rejected_raw_records=rejected))
+                statistics=statistics,dynamic_statistics=dynamic_statistics(values),points=values,rejected_raw_records=rejected,
+                range_configuration_warning='Historical MAP/MAF CSV uses its recorded decoder; missing 014F/0150 observations cannot certify physical scaling. Originals are never rewritten.'))
     return dict(schema_version=1,private=True,groups=groups,limitations=LIMITATIONS,selected_formula=None,
         pressure=None,regeneration=None,soot=None,ash=None,hardware_verified=False,cloud_upload=False,plot_limit=2000)
 
@@ -100,6 +136,20 @@ def export_dpf_report(report,path,inputs=()):
             unit='raw integer' if field not in CONTEXT else points[0]['context'][field]['unit']
             blocks.append('<h3>'+escape(field+' / '+unit)+'</h3><p>'+escape(f'Actual timestamps; no interpolated curve. Vertical range {bottom:g}–{top:g}. Context uses prior samples, not simultaneous values.')+'</p>'+svg)
         blocks.append('<pre>'+escape(json.dumps(group['statistics'],indent=2))+'</pre>')
+        blocks.append('<h3>Dynamic descriptive evidence · no causality</h3><pre>'+escape(json.dumps(group['dynamic_statistics'],indent=2))+'</pre><p>'+escape(group['range_configuration_warning'])+'</p>')
+        for name in CONTEXT:
+            pairs=[p for p in points if p['raw_only_polling'] and p['context'][name]['value'] is not None][:2000]
+            if not pairs:continue
+            xs=[p['context'][name]['value'] for p in pairs];ys=[p['AB_big_endian_HYPOTHESIS'] for p in pairs]
+            xmin,xmax=min(xs),max(xs);ymin,ymax=min(ys),max(ys)
+            scatter='<svg viewBox="0 0 800 250" role="img" aria-label="RAW hypothesis versus asynchronous context">'
+            for p in pairs:
+                cx=50+690*(p['context'][name]['value']-xmin)/max(1,xmax-xmin);cy=185-155*(p['AB_big_endian_HYPOTHESIS']-ymin)/max(1,ymax-ymin)
+                tooltip=p['timestamp']+' / '+p['payload_hex']+' / context age '+str(p['context'][name]['age_seconds'])+' s'
+                scatter+=f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="3" fill="#176c85"><title>'+escape(tooltip)+'</title></circle>'
+            scatter+='<text x="50" y="220">'+escape(f'{name} {xmin:g}–{xmax:g} {pairs[0]["context"][name]["unit"]}; prior samples, not simultaneous')+'</text><text x="50" y="240">'+escape(f'RAW first-word HYPOTHESIS {ymin:g}–{ymax:g}; no physical unit or causal inference')+'</text></svg>'
+            blocks.append('<h3>'+escape('RAW first-word HYPOTHESIS vs '+name)+'</h3>'+scatter)
+        blocks.append('<details><summary>All six bytes and prior context / ages · preview ≤2000 points</summary><pre>'+escape('\n'.join(p['timestamp']+' / '+p['payload_hex']+' / '+json.dumps(p['context']) for p in points[:2000]))+'</pre></details>')
     html='<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'"><title>Private DPF RAW evolution</title><style>body{font:16px system-ui;margin:2em;max-width:1100px}svg{width:100%;max-width:900px}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><h1>Private DPF RAW evolution</h1><p>'+escape(LIMITATIONS)+'</p>'+''.join(blocks)+'</body></html>'
     _write_atomic([(target.with_suffix('.json'),json.dumps(report,ensure_ascii=False,indent=2)+'\n'),(target.with_suffix('.html'),html)])
     return target.with_suffix('.html')
