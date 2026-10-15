@@ -51,3 +51,6 @@ MokkaECULab.exe --dpf-bundles private-one.zip private-two.zip --dpf-output fresh
 ## Field validation
 
 While parked, verify LIVE identity/current ECU, one session ID, recording before session Discovery, all currently eligible known PIDs, and two genuinely stored six-byte `017A` replies when eligible. Check individual NOx/reagent/SCR fields and observed cadence. After normal driving and parked Finish, verify EXPORTED, adapter disconnected, exact path and non-null receipt, all expected journal/CSV observations and checksums. Keep the real ZIP and any analysis local. Physical v0.2.8 ECU/adapter/drive validation remains pending until this field session.
+# v0.2.10 note
+
+The default Comprehensive session still uses **Connect → Start Session → Finish Session** and includes every eligible sensor. The optional pre-drive DPF + Turbo choice explicitly selects a critical subset; its omissions are recorded. The separate visible [Benchmark](V0210_BENCHMARK.md) owns automatic connection/preflight and a fixed sixty-second experiment. It cannot interrupt an existing session. Historical scope/count notes below describe earlier versions.
