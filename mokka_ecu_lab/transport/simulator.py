@@ -6,6 +6,7 @@ SCENARIOS = ["Normal idle", "Warming up", "RPM variation", "Adapter timeout", "E
 SCENARIOS += ['Diesel discovery', 'Diesel discovery 29-bit', 'Diesel multi-ECU', 'Diesel truncated', 'Diesel unknown page']
 SCENARIOS += ['Diesel alternative layouts']
 SCENARIOS += ['Diesel thirteen sensors']
+SCENARIOS += ['Standard expanded research']
 
 # Constructed, non-identifying payloads. Shape and framing tests, not live logs.
 ALTERNATIVE_PAYLOADS = {0x7A: bytes.fromhex('00 C8 00 00 00 00'),
@@ -47,6 +48,11 @@ class Simulator(SafeTransport):
         if scenario == 'Diesel thirteen sensors':
             # Constructed fixed-list subset; never copied raw support bytes or telemetry.
             self.supported_fixture={4,5,11,12,13,15,16,66,70,0x7A,0x83,0x85,0x88,0x60,0x80}
+        if scenario=='Standard expanded research':
+            from mokka_ecu_lab.protocols import EXTENSION_PIDS
+            # Constructed 38-ID set differs from private capture: oil replaces
+            # ambient, A1 replaces 9D, and six bitmap pages instead of five.
+            self.supported_fixture={4,5,11,12,13,15,16,66,92,0x7A,0x83,0x85,0x88,0x01,0xA1}|set(EXTENSION_PIDS)|{0x20,0x40,0x60,0x80,0xA0}
 
     def _exchange(self, command, stop, timeout):
         if stop.wait(0.015): raise Cancelled("Simulation stopped")
@@ -61,6 +67,18 @@ class Simulator(SafeTransport):
             payload = bits.to_bytes(4, "big")
         else:
             self.n += 1
+            if self.scenario=='Standard expanded research':
+                from mokka_ecu_lab.sensors.extended import EXTENDED_STANDARD
+                if pid in EXTENDED_STANDARD:
+                    definition=EXTENDED_STANDARD[pid];payload=bytearray(definition.length)
+                    for field in definition.fields:
+                        if field.support_bit is not None:payload[field.support_byte]|=1<<field.support_bit
+                        if field.value_bit is not None:payload[field.start]|=1<<field.value_bit
+                        elif field.labels:payload[field.start]=4 if pid==0x51 else 6
+                        else:payload[field.start:field.start+field.size]=(35+field.start*9).to_bytes(field.size,'big')
+                    if pid in {0x4F,0x50}:payload=bytearray(definition.length)
+                    return (can_reply('18DAF110',pid,bytes(payload))+'\r>').encode()
+                if pid==0x7A:return (can_reply('18DAF110',pid,bytes([0xB7,20+self.n%40,7,8,9,10]))+'\r>').encode()
             if self.scenario == "Conditions Not Correct" and self.n >= 4:
                 return b"7E8 03 7F 01 22\r>"
             if self.scenario == "Adapter timeout" and self.n % 5 == 0:
@@ -71,8 +89,8 @@ class Simulator(SafeTransport):
             if self.scenario == "Malformed response" and self.n % 4 == 0: return b"7E8 04 41 ZZ\r>"
             if self.scenario == "Incomplete reply" and self.n % 4 == 0:
                 raise TransportError("SIMULATED incomplete reply", b"7E8 04 41")
-            if pid in DIESEL_PAYLOADS and self.scenario.startswith('Diesel'):
-                header = '18DAF110' if '29-bit' in self.scenario else '7E8'
+            if pid in DIESEL_PAYLOADS and (self.scenario.startswith('Diesel') or self.scenario=='Standard expanded research'):
+                header = '18DAF110' if '29-bit' in self.scenario or self.scenario=='Standard expanded research' else '7E8'
                 payload=ALTERNATIVE_PAYLOADS.get(pid,DIESEL_PAYLOADS[pid]) if self.scenario=='Diesel alternative layouts' else DIESEL_PAYLOADS[pid]
                 if self.scenario=='Diesel thirteen sensors' and pid==0x7A:
                     payload=bytes([0xA5,40+self.n%20,3,4,5,6])
@@ -92,7 +110,7 @@ class Simulator(SafeTransport):
             payload = val.to_bytes(length, "big")
         data = bytes([2 + len(payload), 0x41, pid]) + payload
         line = "7E8 " + data.hex(' ').upper()
-        if self.scenario == 'Diesel discovery 29-bit': line = line.replace('7E8','18DAF110')
+        if self.scenario in {'Diesel discovery 29-bit','Standard expanded research'}: line = line.replace('7E8','18DAF110')
         if self.scenario == 'Diesel multi-ECU' and pid in range(0,256,32):
             other = {5,32,64,96,120,128,133}
             bits = sum(1 << (31-(x-pid-1)) for x in other if pid < x <= pid+32)
