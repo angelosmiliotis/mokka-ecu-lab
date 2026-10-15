@@ -4,7 +4,7 @@ import time
 from datetime import datetime,timezone
 from PySide6.QtCore import Qt,QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QLabel,QGroupBox,QTableWidget,QTableWidgetItem,QCheckBox,QTextEdit,QHeaderView,QAbstractItemView
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QLabel,QGroupBox,QTableWidget,QTableWidgetItem,QCheckBox,QTextEdit,QHeaderView,QAbstractItemView,QComboBox
 from .components import FlowLayout,caption,page_heading
 from .theme import style_table
 from mokka_ecu_lab.auto_capture import ALL_SENSOR_PIDS
@@ -52,6 +52,17 @@ class SessionPanel(QWidget):
         layout.addWidget(caption('No single temperature, NOx, MAP or reagent snapshot diagnoses health. NOx absent slots are unavailable; reagent level is quantized, not measured consumption. SCR current state and historical counters have separate meanings.'))
         self.advanced=QCheckBox('Advanced / Developer · manual diagnostics and offline tools')
         self.advanced.toggled.connect(self.update); layout.addWidget(self.advanced)
+        self.benchmark_group=QGroupBox('Stationary benchmark · Advanced only · fixed ≤4 aggregate req/s')
+        bench_layout=QVBoxLayout(self.benchmark_group)
+        bench_layout.addWidget(caption('Requires idle connected adapter, completed current Discovery and already positive RPM/MAP/MAF. No active session/recording. Maximum 48 requests / 60 seconds; aborts on errors and disconnects. Conditions are user-reported.'))
+        bench_layout.addWidget(caption('Confirm: parked, transmission safe, brake engaged, adequate ventilation, and no other OBD client connected.'))
+        self.bench_consent=QCheckBox('Stationary conditions above confirmed')
+        self.bench_consent.toggled.connect(self.update)
+        self.bench_consent.setStyleSheet('QCheckBox { padding: 4px; }');bench_layout.addWidget(self.bench_consent)
+        bench_row=FlowLayout();self.bench_rate=QComboBox();self.bench_rate.addItems(['1','2','4']);self.bench_rate.setCurrentText('2');bench_row.addWidget(self.bench_rate)
+        self.bench_start=window.button('Start stationary benchmark',lambda:window.send('benchmark_start',parked_consent=self.bench_consent.isChecked(),rate=float(self.bench_rate.currentText())))
+        self.bench_stop=window.button('Stop benchmark',lambda:window.send('benchmark_stop'));bench_row.addWidget(self.bench_start);bench_row.addWidget(self.bench_stop);bench_layout.addLayout(bench_row)
+        self.bench_status=caption('No benchmark started; normal session workflow remains three actions.');bench_layout.addWidget(self.bench_status);layout.addWidget(self.benchmark_group)
         layout.addStretch()
         self.update()
 
@@ -86,6 +97,17 @@ class SessionPanel(QWidget):
         self.finish.setEnabled(active and not pending and state!='FINALIZING')
         self.advanced.setEnabled(not active and not pending)
         developer=self.advanced.isChecked() and not active and not pending
+        self.benchmark_group.setVisible(developer)
+        benchmark=getattr(w,'benchmark_state',{})
+        if benchmark.get('active'):
+            for button in (self.connect,self.start,self.finish,self.advanced):button.setEnabled(False)
+            for widget in (w.source,w.port,w.baud,w.scenario,w.rate,w.refresh_port_button):widget.setEnabled(False)
+            w.status_indicators['Activity'].setText('Activity · Stationary benchmark')
+        self.bench_start.setEnabled(developer and self.bench_consent.isChecked() and w.connected and not w.recording_id and not w.polling_active and not benchmark.get('active'))
+        self.bench_stop.setEnabled(bool(benchmark.get('active')))
+        self.bench_status.setText(str(benchmark.get('reason','No benchmark started; normal session workflow remains three actions.'))+
+            (f' · {benchmark.get("requests",0)} / 48 requests · {benchmark.get("rate",0):g} total req/s' if benchmark else '')+
+            ('\nPrivate bundle: '+benchmark['bundle_path'] if benchmark.get('bundle_path') else ''))
         for i in (0,2,3,5,6):
             if hasattr(w,'sidebar'): w.sidebar.buttons[i].setVisible(developer)
         for button in (w.connect_button,w.disconnect_button): button.setVisible(developer)
@@ -104,15 +126,22 @@ class SessionPanel(QWidget):
         elapsed=d.get('duration_seconds',0.)
         if active and d.get('started_at'): elapsed=(datetime.now(timezone.utc)-datetime.fromisoformat(d['started_at'])).total_seconds()
         self.metrics.setText(f'Session {d.get("session_id") or "—"}  ·  {elapsed:.1f} s  ·  recording {"ACTIVE / worker confirmed" if d.get("recording_active") else "closed / off"}\n'
-            f'Scheduled {len(schedule)}  ·  observed {sum(v.get("positive_samples",0)>0 for v in observed.values())}  ·  omitted {len({e["pid"] for e in r.get("requested_plan",{}).get("omitted",[])})} / {len(ALL_SENSOR_PIDS)} known PIDs  ·  ≤{d.get("rate_limit",w.rate.value()):g} total req/s\n'
+            f'Scheduled {len(schedule)}  ·  observed {sum(v.get("positive_samples",0)>0 for v in observed.values())}  ·  omitted {len({e["pid"] for e in r.get("requested_plan",{}).get("omitted",[])+r.get("runtime_omissions",[])})} / {len(ALL_SENSOR_PIDS)} known PIDs  ·  ≤{d.get("rate_limit",w.rate.value()):g} total req/s\n'
             f'Recorded transactions {d.get("recorded_transactions",0)}  ·  transaction errors {d.get("transaction_errors",0)}\n'+
             'Quality: '+', '.join(f'{name} {r.get("acquisition_error_categories",{}).get(category,0)}' for name,category in
                 (('layout mismatches','DECODER_LAYOUT'),('transport failures','TRANSPORT_FAILURE'),('intentional cancellations','INTENTIONAL_CANCELLATION'),('ECU/framing failures','ECU_OR_FRAMING'))))
         proof=r.get('dpf',{}); count=proof.get('recorded_positive_six_byte_frames',0)
+        pacing=r.get('adaptive_pacing',{})
+        if pacing:self.metrics.setText(self.metrics.text()+f'\nAdaptive effective rate {pacing["rate"]:g} req/s · ceiling {pacing["policy_ceiling"]:g} · '+pacing['reason'])
         proof_state=proof.get('state','WAITING') if active else ('RECORDED PROOF' if count>=2 else 'NOT CAPTURING')
         self.dpf.setText(f'{proof_state}  ·  worker scheduled {"YES" if proof.get("worker_scheduled") else "NO"}  ·  stored six-byte positives {count} / 2\n'+
             f'Last stored UTC: {proof.get("last_timestamp") or "—"}  ·  {proof.get("last_payload_hex") or "No stored RAW reply"}\n'+proof.get('reason','Start Session performs fresh recorded Discovery'))
         self.path.setText(('Verified private bundle: '+d['bundle_path']) if d.get('checksums_verified') and d.get('bundle_path') else ('Original journal: '+d['journal_path']) if d.get('journal_path') else 'No recorded session / export yet')
+        if benchmark.get('active'):
+            self.identity.setText('STATIONARY BENCHMARK · '+benchmark.get('mode','UNKNOWN')+' · ECU '+str(benchmark.get('ecu')))
+            self.state.setText('BENCHMARK ACTIVE · fixed verified subset; conditions USER_REPORTED')
+            self.metrics.setText(f'Benchmark {benchmark.get("session_id")} · {benchmark.get("requests",0)} / 48 requests · {benchmark.get("rate",0):g} total req/s · maximum 60 seconds')
+            self.dpf.setText('NOT CAPTURING · This fixed benchmark samples RPM / MAP / MAF. Normal DPF capture starts through Start Session.')
         self.folder.setEnabled(bool(d.get('bundle_path') or d.get('journal_path')))
         self.retry.setEnabled(state=='FAILED' and d.get('retry_export',False) and not active and not pending and not d.get('adapter_open'))
         if time.monotonic()-self.last_table_update>=1:
@@ -121,7 +150,7 @@ class SessionPanel(QWidget):
     def refresh_catalog(self,receipt):
         w=self.window; ecu=self.snapshot.get('ecu') or w.source_key(); self.catalog.setRowCount(0)
         matrix={e['pid']:e for e in receipt.get('requested_plan',{}).get('matrix',[])}
-        omitted={e['pid']:e['reason'] for e in receipt.get('requested_plan',{}).get('omitted',[])}
+        omitted={e['pid']:e['reason'] for e in receipt.get('requested_plan',{}).get('omitted',[])+receipt.get('runtime_omissions',[])}
         for pid in sorted(ALL_SENSOR_PIDS):
             key=f'{pid:02X}'; stats=receipt.get('observed',{}).get(key,{})
             plan=receipt.get('effective_schedule',{}).get(key,{})
@@ -142,6 +171,7 @@ class SessionPanel(QWidget):
                 row=self.catalog.rowCount(); self.catalog.insertRow(row)
                 gap=lambda x:'—' if x is None else f'{x:.3g}'
                 value='—' if not sample else f'{sample["value"]:.6g}'
+                if sample and isinstance(sample.get('display'),str):value+=' · '+sample['display']
                 values=[f'01{key} · {name}',value,unit,state,f'{ecu or "—"} / {self.snapshot.get("source_kind","UNKNOWN")}',sample['samples'] if sample else stats.get('raw_only_samples',0) if 'RAW' in sid else 0,
                     sample['timestamp'] if sample else stats.get('last_timestamp','—'),gap(age),gap(nominal),gap(stats.get('mean_interval_seconds'))+' / '+gap(stats.get('maximum_gap_seconds')),reason]
                 for column,text in enumerate(values):

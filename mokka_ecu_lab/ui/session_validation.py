@@ -8,10 +8,11 @@ from mokka_ecu_lab.transport.simulator import Simulator
 from mokka_ecu_lab import __version__
 
 
-def install_session_validation(window,app,root,*,minimum_samples=2,observer=None):
+def install_session_validation(window,app,root,*,minimum_samples=2,observer=None,expanded=False):
     root=Path(root); output=root/'session-smoke.json'
     if output.exists() or list_sessions(root): raise ValueError('Choose fresh synthetic session validation data')
-    window.source.setCurrentIndex(0); window.scenario.setCurrentText('Diesel thirteen sensors')
+    window.source.setCurrentIndex(0); window.scenario.setCurrentText('Standard expanded research' if expanded else 'Diesel thirteen sensors')
+    expected_count=36 if expanded else 13;expected_ecu='18DAF110' if expanded else '7E8'
     window.session_panel.advanced.setChecked(False); window.tabs.setCurrentIndex(7)
     app.setQuitOnLastWindowClosed(False)
     stage='connect'; began=time.monotonic(); last=began; gaps=[]; wire=[]; sid=None; states=[]
@@ -39,15 +40,15 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
             if state=='FAILED': raise AssertionError(d.get('reason')+' '+str(d.get('export_error')))
             if stage=='connect' and state=='CONNECTED':
                 assert not window.recording_id and not list_sessions(root) and not window.polling_active
-                assert d['source_kind']=='SIMULATED' and d['ecu']=='7E8'
+                assert d['source_kind']=='SIMULATED' and d['ecu']==expected_ecu
                 observe('session-connected'); window.session_panel.start.click(); stage='capture'
             elif stage=='capture':
                 if d.get('session_id'):
                     if sid is None: sid=d['session_id']
                     assert sid==d['session_id'] and len(list_sessions(root))==1
-                if r.get('dpf',{}).get('state')=='READY' and len(r.get('observed',{}))==13 and all(
+                if r.get('dpf',{}).get('state')=='READY' and len(r.get('observed',{}))==expected_count and all(
                         v.get('positive_samples',0)>=minimum_samples for v in r['observed'].values()):
-                    assert len(r['effective_schedule'])==13 and r['confirmed_raw_pids']==['7A']
+                    assert len(r['effective_schedule'])==expected_count and r['confirmed_raw_pids']==['7A']
                     assert r['effective_schedule']['7A']['weight']==4 and r['effective_schedule']['0C']['weight']==3
                     assert all(b['recorded'] for b in r['bitmap_evidence'].values())
                     assert not r['pre_connect_initialization_recorded'] and window.recording_id==sid

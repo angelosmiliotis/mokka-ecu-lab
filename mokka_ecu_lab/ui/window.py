@@ -426,6 +426,7 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.button('Recorded trends…',self.open_trends)); controls.addStretch(); layout.addLayout(controls)
         layout.addWidget(self.button('Offline Sport / Normal comparison…',self.open_phase_comparison))
         layout.addWidget(self.button('Offline DPF RAW evolution…',self.open_dpf_evolution))
+        layout.addWidget(self.button('Offline ECU inventory / OBD performance…',self.open_obd_report))
         layout.addWidget(self.button('Recover / retry selected session export offline',self.recover_selected_session))
         self.tabs.addTab(tab, "Sessions")
 
@@ -529,6 +530,11 @@ class MainWindow(QMainWindow):
     def recover_selected_session(self):
         session=self.current_session()
         if session: self.send('session_export_retry',session_id=session['id'])
+
+    def open_obd_report(self):
+        from .obd import ObdDialog
+        paths,_=QFileDialog.getOpenFileNames(self,'Private offline ECU inventory / performance','','ZIP (*.zip)')
+        if paths:self.obd_dialog=ObdDialog(paths,self);self.obd_dialog.show()
 
     def build_raw(self):
         tab = QWidget(); layout = QVBoxLayout(tab); layout.setContentsMargins(0,4,0,0)
@@ -1338,6 +1344,7 @@ class MainWindow(QMainWindow):
             try: kind, value = self.worker.events.get_nowait()
             except queue.Empty: break
             if kind == "notice": self.notice(value)
+            elif kind=='benchmark':self.benchmark_state=value;self.session_panel.update()
             elif kind=='session_state': self.session_panel.acknowledge(value)
             elif kind=='session_rejected':
                 self.notice(value)
