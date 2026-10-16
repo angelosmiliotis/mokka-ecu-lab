@@ -1,0 +1,110 @@
+{
+  "version": "0.2.11",
+  "source": "SIMULATED_CONSTRUCTED_ONLY",
+  "private_input_used": false,
+  "hardware_connected": false,
+  "regression_tests": 611,
+  "regression_seconds": 322.58,
+  "native_windows_scales": [
+    1,
+    1.25,
+    1.5
+  ],
+  "physical_resolutions": [
+    [
+      1280,
+      720
+    ],
+    [
+      1366,
+      768
+    ],
+    [
+      1536,
+      864
+    ],
+    [
+      1920,
+      1080
+    ]
+  ],
+  "native_geometry_checks": {
+    "benchmark": 52,
+    "normal_session": 48,
+    "critical_session": 16,
+    "main_pages": 96,
+    "offline_views": 60,
+    "history_versions": 36,
+    "com_open_failure": 12
+  },
+  "native_geometry_total": 320,
+  "contact_sheets_visually_reviewed": 27,
+  "compiled_project_modules": 57,
+  "source_mismatches": 0,
+  "actual_packaged_process_exits": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "packaged_child_old_build_smoke_exits": [
+    0,
+    0
+  ],
+  "sequential_benchmarks": [
+    {
+      "rate": 2,
+      "requests": 115,
+      "duration_seconds": 60.01600000000326,
+      "minimum_wire_gap_ms": 500.0,
+      "connected_idle": true
+    },
+    {
+      "rate": 3,
+      "requests": 171,
+      "duration_seconds": 60.046000000002095,
+      "minimum_wire_gap_ms": 343.0,
+      "connected_idle": true
+    },
+    {
+      "rate": 4,
+      "requests": 223,
+      "duration_seconds": 60.01499999999942,
+      "minimum_wire_gap_ms": 250.0,
+      "connected_idle": true
+    }
+  ],
+  "one_transport_reused": true,
+  "idle_requests": 0,
+  "explicit_disconnect_verified": true,
+  "normal_scheduled_pids": 13,
+  "comprehensive_scheduled_pids": 36,
+  "critical_scheduled_pids": 13,
+  "expanded_stored_raw_frames": 7,
+  "constructed_migration": {
+    "logical_runs": 6,
+    "original_companions": 18,
+    "com_open_failures": 2,
+    "originals_unchanged": true,
+    "idempotent": true,
+    "wrapper_verified": true
+  },
+  "managed_current_rollback_verified": true,
+  "source_packaged_offline_json_html_byte_identical": true,
+  "synthetic_offline_inputs": 3,
+  "offline_report_pairs_checked": 54,
+  "live_ceiling_req_per_second": 4,
+  "read_only": true,
+  "allowlist_unchanged": true,
+  "high_rate_live_enabled": false,
+  "no_real_cleanup_or_source_move": true,
+  "normal_primary_actions": [
+    "Connect",
+    "Start Session",
+    "Finish Session"
+  ]
+}
