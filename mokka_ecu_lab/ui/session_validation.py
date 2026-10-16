@@ -8,11 +8,12 @@ from mokka_ecu_lab.transport.simulator import Simulator
 from mokka_ecu_lab import __version__
 
 
-def install_session_validation(window,app,root,*,minimum_samples=2,observer=None,expanded=False):
+def install_session_validation(window,app,root,*,minimum_samples=2,observer=None,expanded=False,critical=False):
     root=Path(root); output=root/'session-smoke.json'
     if output.exists() or list_sessions(root): raise ValueError('Choose fresh synthetic session validation data')
-    window.source.setCurrentIndex(0); window.scenario.setCurrentText('Standard expanded research' if expanded else 'Diesel thirteen sensors')
-    expected_count=36 if expanded else 13;expected_ecu='18DAF110' if expanded else '7E8'
+    window.source.setCurrentIndex(0); window.scenario.setCurrentText('Standard expanded research' if expanded or critical else 'Diesel thirteen sensors')
+    expected_count=13 if critical else 36 if expanded else 13;expected_ecu='18DAF110' if expanded or critical else '7E8'
+    if critical:window.session_panel.profile.setCurrentIndex(1)
     window.session_panel.advanced.setChecked(False); window.tabs.setCurrentIndex(7)
     app.setQuitOnLastWindowClosed(False)
     stage='connect'; began=time.monotonic(); last=began; gaps=[]; wire=[]; sid=None; states=[]
@@ -49,7 +50,7 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
                 if r.get('dpf',{}).get('state')=='READY' and len(r.get('observed',{}))==expected_count and all(
                         v.get('positive_samples',0)>=minimum_samples for v in r['observed'].values()):
                     assert len(r['effective_schedule'])==expected_count and r['confirmed_raw_pids']==['7A']
-                    assert r['effective_schedule']['7A']['weight']==4 and r['effective_schedule']['0C']['weight']==3
+                    assert r['effective_schedule']['7A']['weight']==4 and r['effective_schedule']['0C']['weight']==(4 if critical else 3)
                     assert all(b['recorded'] for b in r['bitmap_evidence'].values())
                     assert not r['pre_connect_initialization_recorded'] and window.recording_id==sid
                     observe('session-ready')
@@ -63,12 +64,13 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
                 journal=root/session[0]['raw_path']; assert hashlib.sha256(journal.read_bytes()).hexdigest()==d['original_journal_sha256']
                 tx=[json.loads(l) for l in members['raw-redacted.jsonl'].splitlines() if json.loads(l).get('record_type')=='transaction']
                 assert tx[0]['command']=='0100' and not any(t['command']=='ATI' for t in tx)
-                assert len(list((root/'bundles').glob('*.zip')))==1
+                assert len(list((root/'Reports').rglob('original-research.zip')))==1
                 assert all(b['monotonic_ns']-a['monotonic_ns']>=250000000 for a,b in zip(wire,wire[1:]))
                 assert not any(w['command'].startswith('22') for w in wire)
                 assert window.capture_monitor_errors==0
                 observe('session-exported')
                 result.update(passed=True,version=__version__,source='SIMULATED',private_input_used=False,hardware_connected=False,
+                    critical_profile=critical,profile=window.session_panel.profile.currentData(),
                     primary_actions=['Connect','Start Session','Finish Session'],session_id=sid,bundle_path=d['bundle_path'],
                     one_session=True,closed_recording=True,adapter_disconnected=True,automatic_bundle_verified=True,
                     scheduled_pids=list(result['capture_receipt']['effective_schedule']),

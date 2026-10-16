@@ -29,6 +29,7 @@ class ObdDialog(QDialog):
         try:
             self.report=self.future.result();self.groups.blockSignals(True)
             for i,session in enumerate(self.report['sessions']):
+                if not session['inventory']:self.groups.addItem(f'Bundle {i+1} · no verified ECU / preflight outcome',(i,None))
                 for j,g in enumerate(session['inventory']):self.groups.addItem(f'Bundle {i+1} · {g["ecu"]} · {g["mode"]} · {g["source_kind"]}',(i,j))
             self.groups.blockSignals(False);self.render();self.export_button.setEnabled(True)
             self.status.setText('Checksum-verified offline report. Compare source groups separately; opening sent no requests.')
@@ -37,8 +38,12 @@ class ObdDialog(QDialog):
         if self.report is None:return
         selected=self.groups.currentData()
         if selected is None:return
-        i,j=selected;session=self.report['sessions'][i];g=session['inventory'][j]
+        i,j=selected;session=self.report['sessions'][i]
+        if j is None:
+            self.inventory_view.setPlainText('No current ECU inventory. Port-open/preflight failure is not ECU overload.\n'+json.dumps(session.get('benchmark'),indent=2));self.performance_view.setPlainText(json.dumps(self.report.get('benchmark_comparisons',[]),indent=2));return
+        g=session['inventory'][j]
         lines=[f'Declared {g["declared_count"]} non-bitmap identifiers · outside legacy scope {g["outside_legacy_scope_count"]} · implemented {g["implemented_declared_count"]}',
+            'Bitmap coverage '+g['bitmap_coverage']+' · '+g['inventory_scope_note'],
             'Support is not observation. Decoder tests do not establish vehicle calibration. No unknown identifier is probed.']
         for r in g['rows']:
             if r['advertised_support']=='SUPPORTED' or r['response_observed']:
@@ -47,7 +52,7 @@ class ObdDialog(QDialog):
         if self.report.get('inventory_comparisons'):lines.append('Separate address/source inventory comparisons:\n'+json.dumps(self.report['inventory_comparisons'],indent=2))
         self.inventory_view.setPlainText('\n\n'.join(lines))
         perf=[p for p in session['performance'] if (p['mode'],p['source_kind'],p['context_id'])==(g['mode'],g['source_kind'],g['context_id'])]
-        self.performance_view.setPlainText(json.dumps(dict(performance=perf,benchmark=session.get('benchmark'),separate_benchmark_comparisons=self.report.get('benchmark_comparisons',[])),indent=2)+'\n\nApplication/adapter timings and policy slack are not ECU capacity. No higher-than-four request-rate validation.')
+        self.performance_view.setPlainText(json.dumps(dict(performance=perf,benchmark=session.get('benchmark'),field_quality=session.get('field_quality',[]),separate_benchmark_comparisons=self.report.get('benchmark_comparisons',[])),indent=2)+'\n\nApplication/adapter timings and policy slack are not ECU capacity. No higher-than-four request-rate validation.')
     def export(self):
         path,_=QFileDialog.getSaveFileName(self,'Fresh private OBD report','private-obd-report.html','HTML (*.html)')
         if path:

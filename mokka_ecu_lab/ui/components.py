@@ -70,7 +70,7 @@ class FlowLayout(QLayout):
 
 
 class Sidebar(QWidget):
-    ORDER = ((7, 'Session Dashboard', 'dashboard'), (8, 'Benchmark', 'discovery'), (0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
+    ORDER = ((7, 'Session Dashboard', 'dashboard'), (8, 'Benchmark', 'discovery'), (9,'History / Reports','sessions'),(10,'App Versions','research'),(0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
              (1, 'Sessions', 'sessions'), (3, 'Sensor Explorer', 'explorer'), (2, 'Raw Data', 'raw'),
              (5, 'Discovery', 'discovery'), (4, 'Research', 'research'))
 
@@ -78,17 +78,21 @@ class Sidebar(QWidget):
         super().__init__(parent); self.setObjectName('sidebar'); self.tabs = tabs
         self.compact = False; self.buttons = {}; self.group_labels = []
         layout = QVBoxLayout(self); layout.setContentsMargins(8, 14, 8, 12); layout.setSpacing(4)
+        more=QWidget();more_layout=QVBoxLayout(more);more_layout.setContentsMargins(0,0,0,0);more_layout.setSpacing(4)
+        area=QScrollArea();area.setWidgetResizable(True);area.setFrameShape(QFrame.Shape.NoFrame);area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);area.setWidget(more)
+        keys={7:'Alt+1',8:'Alt+2',0:'Alt+3',6:'Alt+4',1:'Alt+5',3:'Alt+6',2:'Alt+7',5:'Alt+8',4:'Alt+9',9:'Ctrl+Alt+H',10:'Ctrl+Alt+V'}
         for n, (index, label, symbol) in enumerate(self.ORDER):
-            if n in (0, 2, 5):
-                group = QLabel(('OVERVIEW', 'DATA', 'RESEARCH')[(0, 2, 5).index(n)])
-                group.setObjectName('caption'); layout.addWidget(group); self.group_labels.append(group)
+            target=layout if n<4 else more_layout
+            if n in (0, 4, 7):
+                group = QLabel(('OVERVIEW', 'DATA', 'RESEARCH')[(0, 4, 7).index(n)])
+                group.setObjectName('caption');target.addWidget(group);self.group_labels.append(group)
             b = QPushButton(label); b.setObjectName('nav'); b.setIcon(icon(symbol)); b.setCheckable(True)
-            b.setAccessibleName(label); b.setToolTip(f'{label} · Alt+{n + 1}')
+            b.setAccessibleName(label); b.setToolTip(label+' · '+keys[index])
             b.clicked.connect(lambda checked=False, i=index: self.activate(i))
-            shortcut = QShortcut(QKeySequence(f'Alt+{n + 1}'), self)
+            shortcut = QShortcut(QKeySequence(keys[index]), self)
             shortcut.activated.connect(lambda i=index: self.activate(i))
-            self.buttons[index] = b; layout.addWidget(b)
-        layout.addStretch(); self.local = caption('LOCAL ONLY\nRead-only · ≤ 4 req/s'); layout.addWidget(self.local)
+            self.buttons[index] = b; target.addWidget(b)
+        more_layout.addStretch();layout.addWidget(area,1);self.local = caption('LOCAL ONLY\nRead-only · ≤ 4 req/s'); layout.addWidget(self.local)
         tabs.currentChanged.connect(self.select); self.select(tabs.currentIndex()); self.set_compact(False)
 
     def activate(self, index):
@@ -100,9 +104,9 @@ class Sidebar(QWidget):
     def set_compact(self, compact):
         self.compact = compact; self.setFixedWidth(max(100,METRICS['compact_sidebar']) if compact else METRICS['sidebar'])
         for index, label, symbol in self.ORDER:
-            self.buttons[index].setText(('Benchmark' if index==8 else 'Session' if index==7 else '') if compact else self.tabs.tabText(index))
-            self.buttons[index].setIcon(QIcon() if compact and index==8 else icon(symbol))
-            self.buttons[index].setStyleSheet('padding-left: 4px; padding-right: 4px;' if compact and index==8 else '')
+            self.buttons[index].setText(({8:'Benchmark',7:'Session',9:'History',10:'Versions'}.get(index,'')) if compact else self.tabs.tabText(index))
+            self.buttons[index].setIcon(QIcon() if compact and index in (7,8,9,10) else icon(symbol))
+            self.buttons[index].setStyleSheet('padding-left: 4px; padding-right: 4px;' if compact and index in (7,8,9,10) else '')
         for label in self.group_labels: label.setVisible(not compact)
         self.local.setVisible(not compact)
 

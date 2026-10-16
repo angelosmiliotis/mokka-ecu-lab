@@ -71,8 +71,11 @@ class MainWindow(QMainWindow):
     def __init__(self, root: Path, *, validation=False):
         super().__init__()
         self.root = root
+        self.validation=validation
         self.registry = load_registry()
         self.worker = AcquisitionWorker(root)
+        from .lifecycle import PowerSuspendFilter
+        self.power_filter=PowerSuspendFilter(self.worker);QApplication.instance().installNativeEventFilter(self.power_filter)
         self.readings, self.support, self.history, self.sensor_errors = {}, {}, {}, {}
         self.support_pages = {}
         self.discovery_observations = {}
@@ -144,6 +147,10 @@ class MainWindow(QMainWindow):
         self.build_discovery(); self.build_capture()
         self.session_panel=SessionPanel(self); self.tabs.addTab(self.session_panel,'Session Dashboard')
         self.benchmark_panel=BenchmarkPanel(self); self.tabs.addTab(self.benchmark_panel,'Benchmark')
+        from .library import HistoryPanel
+        from .versions import VersionsPanel
+        self.history_panel=HistoryPanel(self);self.tabs.addTab(self.history_panel,'History / Reports')
+        self.versions_panel=VersionsPanel(self);self.tabs.addTab(self.versions_panel,'App Versions')
         self.ensurePolished()
         for widget in self.findChildren(QWidget): widget.ensurePolished()
         # Keep the established seven page indices/API, with scrollable content.
@@ -1346,9 +1353,16 @@ class MainWindow(QMainWindow):
             try: kind, value = self.worker.events.get_nowait()
             except queue.Empty: break
             if kind == "notice": self.notice(value)
-            elif kind=='benchmark':self.benchmark_state=value;self.session_panel.update();self.benchmark_panel.acknowledge(value)
+            elif kind=='benchmark':
+                self.benchmark_state=value;self.session_panel.update();self.benchmark_panel.acknowledge(value)
+                if value.get('exported') or value.get('report_status')=='EXPORT_PARTIAL':self.history_panel.refresh()
             elif kind=='benchmark_rejected':self.benchmark_panel.reject(value)
-            elif kind=='session_state': self.session_panel.acknowledge(value)
+            elif kind=='connection_status':
+                self.connection_detail=value
+                if hasattr(self,'benchmark_panel'):self.benchmark_panel.identity.setToolTip(value['stage']+' · '+value['reason']+' · OS pairing unknown')
+            elif kind=='session_state':
+                self.session_panel.acknowledge(value)
+                if value.get('state')=='EXPORTED' or value.get('report_status')=='EXPORT_PARTIAL':self.history_panel.refresh()
             elif kind=='session_rejected':
                 self.notice(value)
                 for action in ('session_start','session_finish','session_export_retry'): self.pending_actions.pop(action,None)
@@ -1630,10 +1644,15 @@ class MainWindow(QMainWindow):
         style_chart(self.signal_chart)
 
     def closeEvent(self, event):
+        if self.history_panel.jobs.busy() or self.versions_panel.jobs.busy():
+            self.notice('Waiting for the bounded offline copy/verification to finish; original files are preserved.');event.ignore();return
         self.timer.stop()
         self.settings.setValue("sensor_order", [self.sensor_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.sensor_list.count())])
         self.send("shutdown")
         self.worker.join(timeout=8)
         if self.worker.is_alive():
             self.timer.start(100); self.notice("Waiting for recording flush. Close again when finished."); event.ignore()
-        else: event.accept()
+        else:
+            self.history_panel.jobs.close();self.versions_panel.jobs.close()
+            QApplication.instance().removeNativeEventFilter(self.power_filter)
+            event.accept()
