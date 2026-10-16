@@ -52,7 +52,7 @@ def test_one_click_worker_records_pretest_and_measurement_then_exports(tmp_path,
         assert w.submit('bench_auto_start',simulation=True,rate=4,parked_consent=True) is False
         b.started=time.monotonic()-60 # integration cleanup; full real timer checked by native/EXE validation
         out=wait_event(w,'benchmark',lambda v:v.get('exported'),timeout=10)
-        assert out['completed'] and out['disconnected'] and not w.transport
+        assert out['completed'] and not out['disconnected'] and w.transport and out['state']=='CONNECTED_IDLE'
         report=analyze_obd([out['bundle_path']]);b=report['sessions'][0]['benchmark']
         assert b['requested_rate']==rate and b['completed'] and b['sent_requests']>=8 and b['preflight_sent_requests']>0
         assert b['pids']==['010B','010C','010D','0110']

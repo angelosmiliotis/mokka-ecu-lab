@@ -66,7 +66,7 @@ def test_three_actions_one_journal_all_thirteen_fields_and_automatic_export(tmp_
         assert commands[0]=='0100' and 'ATI' not in commands
         assert not any(c in commands for c in ('015C','018B','0178','0179','0173'))
         assert len(list_sessions(tmp_path))==1 and list_sessions(tmp_path)[0]['ended']
-        assert len(list((tmp_path/'bundles').glob('*.zip')))==1
+        assert len(list((tmp_path/'Reports').rglob('original-research.zip')))==1
         journal=tmp_path/list_sessions(tmp_path)[0]['raw_path']
         assert hashlib.sha256(journal.read_bytes()).hexdigest()==final['original_journal_sha256']
         assert any(e['state']=='DISCOVERING' for e in final['transitions'])
@@ -128,7 +128,7 @@ def test_missing_windows_port_connect_failure_has_no_pairing_or_recording(tmp_pa
 def test_shutdown_finalizes_and_exports_active_standard_session(tmp_path,fast_clock):
     worker=AcquisitionWorker(tmp_path)
     connect(worker); start(worker); shutdown(worker)
-    assert list_sessions(tmp_path)[0]['ended'] and len(list((tmp_path/'bundles').glob('*.zip')))==1
+    assert list_sessions(tmp_path)[0]['ended'] and len(list((tmp_path/'Reports').rglob('original-research.zip')))==1
 
 
 def test_offline_interrupted_recovery_preserves_tail_and_repairs_missing_rows(tmp_path):

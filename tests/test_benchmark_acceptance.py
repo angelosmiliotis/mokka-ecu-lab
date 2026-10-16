@@ -92,7 +92,7 @@ def test_two_explicit_rates_compare_separately_without_auto_launch(tmp_path,fast
         assert bundles[0]!=bundles[1]
         c=analyze_obd(bundles)['benchmark_comparisons'][0]
         assert c['same_pid_mix'] and c['same_address_source'] and not c['same_requested_rate']
-        assert c['next_user_choice']==4 and c['thermal_match'].startswith('UNKNOWN') and w.benchmark is None and not w.transport
+        assert c['next_user_choice']==4 and c['thermal_match'].startswith('UNKNOWN') and w.benchmark is None and w.transport
     finally:shutdown(w)
 
 
