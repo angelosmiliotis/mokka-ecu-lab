@@ -12,6 +12,16 @@ class TransportError(Exception):
 class Cancelled(TransportError):
     pass
 
+class SerialOpenError(TransportError):
+    """Windows/driver port opening failed before any diagnostic send."""
+    category = 'FAILED_COM_OPEN'
+
+def serial_open_explanation(exc):
+    text=str(exc)
+    if getattr(exc,'winerror',None)==121 or 'semaphore' in text.lower() or ', 121)' in text:
+        return 'FAILED_COM_OPEN / Windows 121 semaphore timeout. No ECU capacity conclusion. Review outgoing port, competing client, Bluetooth availability and OS power/driver state; root cause unconfirmed. '+text
+    return 'FAILED_COM_OPEN. Port unavailable, busy or driver/permission failure; no ECU capacity conclusion. '+text
+
 def discover_ports() -> list[tuple[str, str]]:
     ports = [(p.device, p.description) for p in list_ports.comports()]
     if not any(p[0] == "COM4" for p in ports):
@@ -63,15 +73,24 @@ class SafeTransport:
     def close(self):
         pass
 
+    def idle_status(self):
+        """No wire request. Subclasses may inspect OS handle/prompt health."""
+        return dict(open=True,prompt_synchronized=True)
+
 class SerialTransport(SafeTransport):
     def __init__(self, port: str, baud: int = 115200):
         super().__init__()
         self.baud = baud
-        self.port = serial.Serial(port, baudrate=baud, bytesize=8, parity="N", stopbits=1,
-                                  timeout=0.05, write_timeout=0.3)
+        self.prompt_synchronized=False
+        try:
+            self.port = serial.Serial(port, baudrate=baud, bytesize=8, parity="N", stopbits=1,
+                                      timeout=0.05, write_timeout=0.3)
+        except (serial.SerialException,OSError) as exc:
+            raise SerialOpenError(serial_open_explanation(exc)) from exc
 
     def _exchange(self, command, stop, timeout):
         raw = bytearray()
+        self.prompt_synchronized=False
         try:
             # No retry after a missing prompt: resynchronization requires reconnect.
             self.port.write(command.encode("ascii") + b"\r")
@@ -82,6 +101,7 @@ class SerialTransport(SafeTransport):
                 chunk = self.port.read(1)
                 raw.extend(chunk)
                 if chunk == b">":
+                    self.prompt_synchronized=True
                     return bytes(raw)
                 if len(raw) >= 65536:
                     raise TransportError("Reply exceeds 64 KiB limit", bytes(raw))
@@ -91,3 +111,9 @@ class SerialTransport(SafeTransport):
 
     def close(self):
         self.port.close()
+
+    def idle_status(self):
+        try:
+            return dict(open=self.port.is_open,prompt_synchronized=self.prompt_synchronized and self.port.in_waiting==0)
+        except (serial.SerialException,OSError) as exc:
+            return dict(open=False,prompt_synchronized=False,reason=str(exc))
