@@ -47,8 +47,9 @@ def export_closed_session(root, session_id):
     source=(root/session['raw_path']).resolve()
     if not source.is_relative_to(root.resolve()): raise ValueError('Invalid journal location')
     original=hashlib.sha256(source.read_bytes()).hexdigest()
-    target=root/'bundles'/f'{session_id}-research-{uuid.uuid4().hex[:12]}.zip'
-    export_research_bundle(root,session_id,target)
+    from .library import ReportLibrary,PartialExportError
+    library=ReportLibrary(root);result=library.publish_closed(session_id)
+    target=Path(result['bundle_path'])
     identity,members=read_bundle(target)
     summary=json.loads(members['session-summary.json'])
     if summary['session_id']!=session_id or not summary['ended']: raise ValueError('Exported session identity/closure mismatch')
@@ -56,9 +57,8 @@ def export_closed_session(root, session_id):
     if metadata.get('session_coordinator') and not summary.get('acquisition_receipt'):
         raise ValueError('Automatic session acquisition receipt missing')
     if hashlib.sha256(source.read_bytes()).hexdigest()!=original: raise ValueError('Original journal changed during export')
-    from .analysis.obd import analyze_obd,export_obd_report
-    report_path=export_obd_report(analyze_obd([target]),target.with_suffix('.html'),[target])
-    return dict(obd_report_path=str(report_path),bundle_path=str(target.resolve()), bundle_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+    if result['report_status']=='EXPORT_PARTIAL':raise PartialExportError(result)
+    return result | dict(
         verified_evidence_id=identity, original_journal_sha256=original, checksums_verified=True,
         recorded_mode=summary['mode'],recorded_ecus=json.loads(members.get('ecu-identifiers.json',b'[]')),
         exported_acquisition_receipt=summary.get('acquisition_receipt'))

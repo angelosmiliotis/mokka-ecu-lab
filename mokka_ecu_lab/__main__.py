@@ -4,12 +4,18 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="Mokka ECU Lab — read-only local diagnostics")
+    from mokka_ecu_lab import __version__
+    parser.add_argument('--version',action='version',version=__version__)
     parser.add_argument("--data-dir", type=Path, default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MokkaECULab" / "data")
     parser.add_argument("--smoke-test", action="store_true", help="Offline UI test; never connects to hardware")
     parser.add_argument('--full-auto-smoke-test',action='store_true',help='Explicit synthetic Windows GUI Full Auto validation; never hardware')
     parser.add_argument('--session-smoke-test',action='store_true',help='Synthetic Connect → Start Session → Finish Session GUI validation; never hardware')
     parser.add_argument('--expanded-session-smoke-test',action='store_true',help='Constructed extended standard session GUI validation; never hardware')
+    parser.add_argument('--critical-session-smoke-test',action='store_true',help='Constructed critical subset session GUI validation; never hardware')
     parser.add_argument('--benchmark-smoke-test',action='store_true',help='Constructed Advanced stationary benchmark GUI validation; never hardware')
+    parser.add_argument('--sequential-benchmark-smoke-test',action='store_true',help='Three actual 60-second synthetic runs over one idle connection; never hardware')
+    parser.add_argument('--maintenance-smoke-test',action='store_true',help='Isolated synthetic report migration and trusted public-build rollback validation')
+    parser.add_argument('--maintenance-reference-zips',nargs=2,type=Path,help='Two exact published Windows ZIPs used only by explicit maintenance validation')
     parser.add_argument('--dpf-bundles',nargs='+',type=Path,help='Private offline DPF RAW evolution; starts no GUI or transport')
     parser.add_argument('--dpf-output',type=Path,help='Fresh private DPF HTML / JSON report path')
     parser.add_argument('--obd-bundles',nargs='+',type=Path,help='Private passive inventory/performance analysis; no transport')
@@ -22,11 +28,12 @@ def main():
     parser.add_argument('--phase-annotations',type=Path,help='Private USER_REPORTED annotation sidecar')
     parser.add_argument('--phase-output',type=Path,help='Fresh private HTML / JSON comparison base path')
     args = parser.parse_args()
-    session_validation_requested=args.session_smoke_test or args.expanded_session_smoke_test
-    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.expanded_session_smoke_test,args.benchmark_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles,args.obd_bundles))>1:
+    session_validation_requested=args.session_smoke_test or args.expanded_session_smoke_test or args.critical_session_smoke_test
+    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.expanded_session_smoke_test,args.critical_session_smoke_test,args.benchmark_smoke_test,args.sequential_benchmark_smoke_test,args.maintenance_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles,args.obd_bundles))>1:
         parser.error('Choose one validation / offline analysis mode')
-    if (args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test) and args.data_dir.exists():
+    if (args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test or args.sequential_benchmark_smoke_test or args.maintenance_smoke_test) and args.data_dir.exists():
         parser.error('Synthetic validation requires a fresh --data-dir; existing user data is preserved')
+    if bool(args.maintenance_smoke_test)!=bool(args.maintenance_reference_zips):parser.error('Explicit maintenance validation requires two public reference ZIPs; references cannot enable normal-startup maintenance')
     if args.obd_bundles:
         if not args.obd_output:parser.error('--obd-output required with --obd-bundles')
         from mokka_ecu_lab.analysis.obd import analyze_obd,export_obd_report
@@ -68,13 +75,16 @@ def main():
     from mokka_ecu_lab.ui.window import MainWindow
     app = QApplication([])
     app.setApplicationName("Mokka ECU Lab")
-    window = MainWindow(args.data_dir,validation=bool(args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test)); window.show()
-    if args.benchmark_smoke_test:
+    window = MainWindow(args.data_dir,validation=bool(args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test or args.sequential_benchmark_smoke_test or args.maintenance_smoke_test)); window.show()
+    if args.maintenance_smoke_test:
+        from mokka_ecu_lab.ui.maintenance_validation import install_maintenance_validation
+        maintenance_timer,maintenance_cleanup=install_maintenance_validation(window,app,args.data_dir,args.maintenance_reference_zips)
+    if args.benchmark_smoke_test or args.sequential_benchmark_smoke_test:
         from mokka_ecu_lab.ui.benchmark_validation import install_benchmark_validation
-        benchmark_timer,benchmark_cleanup=install_benchmark_validation(window,app,args.data_dir)
+        benchmark_timer,benchmark_cleanup=install_benchmark_validation(window,app,args.data_dir,sequential=args.sequential_benchmark_smoke_test)
     if session_validation_requested:
         from mokka_ecu_lab.ui.session_validation import install_session_validation
-        session_timer,session_cleanup=install_session_validation(window,app,args.data_dir,expanded=args.expanded_session_smoke_test)
+        session_timer,session_cleanup=install_session_validation(window,app,args.data_dir,expanded=args.expanded_session_smoke_test,critical=args.critical_session_smoke_test)
     if args.full_auto_smoke_test:
         import json,time
         from mokka_ecu_lab.logging.bundle import export_research_bundle
@@ -120,7 +130,8 @@ def main():
         QTimer.singleShot(7200, window.close)
     result=app.exec()
     if session_validation_requested: session_cleanup()
-    if args.benchmark_smoke_test:benchmark_cleanup()
+    if args.benchmark_smoke_test or args.sequential_benchmark_smoke_test:benchmark_cleanup()
+    if args.maintenance_smoke_test:maintenance_cleanup()
     if args.full_auto_smoke_test:
         # The recurring validation callback retains the window in a closure.
         # Destroy its widgets while QApplication still exists, rather than
