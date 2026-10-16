@@ -10,9 +10,13 @@ from mokka_ecu_lab.ui.session_validation import install_session_validation
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir',type=Path,required=True); parser.add_argument('--scale',type=float,default=1)
 parser.add_argument('--expanded',action='store_true',help='Constructed extended standard research profile')
+parser.add_argument('--critical',action='store_true',help='Constructed explicit DPF + Turbo critical subset')
+parser.add_argument('--data-dir',type=Path)
 args=parser.parse_args(); out=args.output_dir.resolve()
 if out.exists(): parser.error('Choose fresh synthetic output')
-out.mkdir(parents=True); app=QApplication([]); ui=MainWindow(out/'synthetic-data',validation=True)
+data=args.data_dir or out/'synthetic-data'
+if data.exists():parser.error('Choose fresh synthetic data root')
+out.mkdir(parents=True); app=QApplication([]); ui=MainWindow(data,validation=True)
 ui.resize(round(1366/args.scale),round(768/args.scale)); ui.show(); app.processEvents()
 assert abs(ui.devicePixelRatioF()-args.scale)<.02,(ui.devicePixelRatioF(),args.scale)
 geometry=[]
@@ -31,9 +35,9 @@ def observe(name,window):
             area.verticalScrollBar().setValue(area.verticalScrollBar().maximum()); app.processEvents()
             assert window.grab().save(str(out/'session-field-catalog.png')); area.verticalScrollBar().setValue(0)
         window.resize(round(1366/args.scale),round(768/args.scale)); app.processEvents()
-timer,cleanup=install_session_validation(ui,app,out/'synthetic-data',minimum_samples=3,observer=observe,expanded=args.expanded)
+timer,cleanup=install_session_validation(ui,app,data,minimum_samples=3,observer=observe,expanded=args.expanded,critical=args.critical)
 code=app.exec(); cleanup(); ui.deleteLater(); QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
-result=json.loads((out/'synthetic-data/session-smoke.json').read_text()); result['native_geometry']=geometry
+result=json.loads((data/'session-smoke.json').read_text()); result['native_geometry']=geometry
 (out/'session-validation.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
 assert code==0 and result['passed'],result
 print(json.dumps({k:result[k] for k in ('passed','primary_actions','scheduled_pids','stored_017a_raw_frames','monitoring_errors','wire_spacing_min_seconds','maximum_gui_tick_gap_seconds')}))
