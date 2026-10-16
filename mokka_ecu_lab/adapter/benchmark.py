@@ -23,6 +23,7 @@ class AutoBenchmark:
         self.phase='CONNECTING';self.reason='Explicit Start BENCH: parked, brake, ventilation and no competing client acknowledged'
         self.requests=0;self.completed=False;self.ended=None;self.transitions=[];self.categories=Counter();self.latencies=deque(maxlen=240)
         self.last_speed=None;self.pretest={};self.minimum_gap=None;self.previous_wire=None;self.violations=0
+        self.keep_connected=True;self.connection_stages=[];self.failure_stage=None;self.port=None
     def transition(self,phase,reason):
         self.phase=phase;self.reason=reason;self.transitions.append(dict(phase=phase,reason=reason,timestamp=utc_now()));self.transitions=self.transitions[-32:]
     def begin(self,now):
@@ -38,7 +39,7 @@ class AutoBenchmark:
             maximum_seconds=60,measurement_started_monotonic=self.started,elapsed_seconds=elapsed,remaining_seconds=max(0.,60-elapsed),
             measurement_duration_seconds=elapsed,wall_duration_seconds=max(0.,now-self.created),completed=self.completed,
             ecu=self.ecu,context_id=self.context_id,mode=self.mode,source_kind='SIMULATED' if self.mode=='SIMULATED' else 'ECU_READING',
-            session_id=self.session_id,conditions='USER_REPORTED; speed zero is not parking-brake proof',
+            session_id=self.session_id,port=self.port,keep_connected=self.keep_connected,connection_stages=deepcopy(self.connection_stages),failure_stage=self.failure_stage,conditions='USER_REPORTED; speed zero is not parking-brake proof',
             speed_check_cadence='One per four transmitted measurement requests, identical at all rates',pretest=self.pretest,
             categories=dict(self.categories),latency_ms=distribution(list(self.latencies)),minimum_wire_gap_ms=self.minimum_gap,
             hard_four_hz_spacing_violations=self.violations,adaptive=False,higher_rate_authorized=False,transitions=deepcopy(self.transitions))
@@ -70,9 +71,15 @@ class BenchmarkWorkflow:
         if self.session.active or self.recorder or self.replay or self.polling or self.capture_mode or self.discovery_active or self.requires_reconnect:
             raise ValueError('Existing acquisition/replay owns the adapter. Finish it explicitly before Start BENCH.')
         if self.transport and bool(options.get('simulation'))!=(self.mode=='SIMULATED'):raise ValueError('Selected source differs from idle connection; disconnect explicitly')
+        if self.transport and not options.get('simulation') and (options.get('port')!=self.port or options.get('baud',115200)!=getattr(self.transport,'baud',115200)):raise ValueError('Selected port/baud differs from idle handle; Disconnect explicitly first')
+        if self.transport and not all(self.transport.idle_status().get(k) for k in ('open','prompt_synchronized')):
+            self.disconnect();raise ValueError('Idle handle or prompt synchronization is invalid; explicitly reconnect')
         if not options.get('simulation') and not options.get('port','').strip():raise ValueError('Select an outgoing LIVE COM port')
         self.benchmark=AutoBenchmark(rate,time.monotonic(),'SIMULATED' if options.get('simulation') else 'LIVE · hardware unverified')
+        self.benchmark.keep_connected=options.get('keep_connected',True) is True
+        self.benchmark.port='SIMULATED' if options.get('simulation') else options.get('port')
         self.benchmark_previous_rate=self.rate;self.rate=float(rate);self.auto_receipt=None
+        if self.transport:self.transport.rate=self.rate;self.transport.operation_deadline_ns=None
         self.emit('auto_reset',dict(context_id=self.context_id));self.bench_emit()
         try:
             self.recorder=Recorder(self.root,self.benchmark.mode,dict(purpose='AUTO_STATIONARY_BENCHMARK',conditions='EXPLICIT_START_BENCH_USER_REPORTED'))
@@ -111,7 +118,9 @@ class BenchmarkWorkflow:
             self.discovery_completed=self.discovery_prepared=True
             self.bench_emit('READY','Current stationary pretest valid; recorded separately from measurement')
             self.benchmark.begin(time.monotonic());self.save_capture_evidence();self.bench_emit()
-        except Exception as exc:self.end_auto_benchmark(('INTENTIONAL_STOP during preflight: ' if self.stop_io.is_set() else 'PREFLIGHT_TIMEOUT: ' if time.monotonic()>=self.benchmark.preflight_deadline else 'Preflight aborted: ')+str(exc))
+        except Exception as exc:
+            self.benchmark.failure_stage='FAILED_COM_OPEN' if getattr(exc,'category',None)=='FAILED_COM_OPEN' or 'open port' in str(exc).lower() else self.benchmark.phase
+            self.end_auto_benchmark(('INTENTIONAL_STOP during preflight: ' if self.stop_io.is_set() else 'PREFLIGHT_TIMEOUT: ' if time.monotonic()>=self.benchmark.preflight_deadline else 'Preflight aborted: ')+str(exc))
 
     def auto_benchmark_tick(self):
         b=self.benchmark;now=time.monotonic()
@@ -147,12 +156,21 @@ class BenchmarkWorkflow:
         b.transition('FINALIZING' if completed else 'ABORTING',reason);self.bench_emit()
         sid=b.session_id;result=None
         try:
-            self.save_capture_evidence();self.close_recording();self.disconnect(finish_recording=False)
+            self.set_polling(False,'Benchmark finalized; zero idle diagnostic traffic')
+            self.capture_mode=False;self.discovery_active=False
+            if self.transport:self.transport.discovery_enabled=False;self.transport.operation_deadline_ns=None
+            self.save_capture_evidence();self.close_recording()
+            healthy=self.transport and all(self.transport.idle_status().get(k) for k in ('open','prompt_synchronized'))
+            if not (completed and b.keep_connected and healthy and not self.stop_io.is_set()):self.disconnect(finish_recording=False)
             b.transition('FINALIZING','Original journal closed; verifying private export')
             if sid:result=export_closed_session(self.root,sid)
             if result:b.transition('EXPORTED','Private ZIP checksum verified; companion report created')
-            b.transition('DISCONNECTED' if completed else 'ABORTED',reason)
-            state=b.snapshot();state.update(result or {},disconnected=True,exported=bool(result),outcome='EXPORTED' if completed else 'ABORTED')
+            healthy=self.transport and all(self.transport.idle_status().get(k) for k in ('open','prompt_synchronized'))
+            keep=bool(completed and b.keep_connected and healthy and not self.stop_io.is_set() and result)
+            if not keep:self.disconnect(finish_recording=False)
+            if completed and b.keep_connected and not healthy:reason+='; idle handle/prompt invalid, disconnected'
+            b.transition('CONNECTED_IDLE' if keep else 'DISCONNECTED' if completed else 'ABORTED',reason)
+            state=b.snapshot();state.update(result or {},disconnected=not keep,exported=bool(result),outcome='COMPLETED' if completed else 'STOPPED' if any(word in reason.lower() for word in ('stop','shutdown','disconnect')) else 'FAILED_COM_OPEN' if b.failure_stage=='FAILED_COM_OPEN' else 'PREFLIGHT_FAILED' if b.started is None else 'MEASUREMENT_FAILED')
         except Exception as exc:
             # Original journal remains recoverable; explicit offline retry only.
             if self.recorder:
@@ -164,11 +182,16 @@ class BenchmarkWorkflow:
             except Exception as close_error:
                 self.requires_reconnect=True;self.emit('notice','Adapter close failed; explicit cleanup required: '+str(close_error))
             state=b.snapshot();state.update(active=False,state='ABORTED',reason=reason,export_error=str(exc),retry_export=bool(sid),disconnected=not bool(self.transport))
+            state.update(getattr(exc,'result',{}))
         finally:
             self.rate=getattr(self,'benchmark_previous_rate',4.);self.benchmark=None
-        if self.session.data['state']=='CONNECTED':
-            self.session.transition('DISCONNECTED','Benchmark closed its idle connection',active=False,adapter_open=False)
-            self.publish_session(True)
+            if self.transport:self.transport.rate=self.rate;self.transport.operation_deadline_ns=None
+            self.idle_health_checked=time.monotonic()
+        if self.transport and state.get('state')=='CONNECTED_IDLE':
+            self.session.transition('CONNECTED','Benchmark complete / CONNECTED IDLE; no polling. Start Session or another explicit BENCH.',active=False,ecu=b.ecu,mode=self.mode,port=self.port,session_id=None,adapter_open=True,source_kind='SIMULATED' if self.mode=='SIMULATED' else 'ECU_READING')
+            self.connection_stage('CONNECTED_IDLE','Verified run exported; OS handle retained without traffic')
+        else:self.session.transition('DISCONNECTED','Benchmark adapter closed',active=False,adapter_open=False)
+        self.publish_session(True)
         self.benchmark_result=state;self.emit('benchmark',state)
 
     def retry_benchmark_export(self,session_id):

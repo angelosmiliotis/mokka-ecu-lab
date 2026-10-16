@@ -35,6 +35,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.quit_event = threading.Event()
         self.transport = self.recorder = self.replay = None
         self.benchmark=None
+        self.connection_state={'stage':'DISCONNECTED','reason':'No open handle; OS pairing state unknown'}
+        self.idle_health_checked=time.monotonic()
         self.registry = load_registry()
         self.selected = list(self.registry)
         self.adapter, self.protocol, self.port, self.mode = "Unknown", "Unknown", "", "Disconnected"
@@ -90,7 +92,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                 except queue.Full: pass
 
     def submit(self, action, **kwargs):
-        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown'}:
+        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown','disconnect','system_suspend'}:
             self.emit('notice','Stationary benchmark owns acquisition; stop it first');return False
         if self.session.active and action in CONFLICTS:
             self.emit('session_rejected', 'Automatic session owns acquisition; Finish Session first')
@@ -108,7 +110,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture", "full_auto", "retry_auto", "session_connect", "session_start", "benchmark_start"}:
             # Clear only at user submission, so a later Stop cancels queued Connect too.
             self.stop_io.clear()
-        if action in {"disconnect", "stop", "shutdown", "replay", "session_finish"}:
+        if action in {"disconnect", "stop", "shutdown", "replay", "session_finish",'system_suspend'}:
             self.stop_io.set()
         try: self.commands.put_nowait((action, kwargs))
         except queue.Full:
@@ -599,9 +601,28 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             self.emit_discovery(False, 'Discovery ended; samples only. Resume basic polling or explicitly start monitoring.')
 
     def set_polling(self, active, reason, requires_reconnect=False):
+        if self.polling and not active:self.idle_health_checked=time.monotonic()
         self.polling = active
         self.requires_reconnect = requires_reconnect
         self.emit("acquisition", {"polling": active, "reason": reason, "requires_reconnect": requires_reconnect})
+
+    def connection_stage(self,stage,reason):
+        self.connection_state=dict(stage=stage,reason=reason,port=self.port,mode=self.mode,pairing='OS_MANAGED_UNKNOWN',timestamp=utc_now())
+        if isinstance(self.benchmark,AutoBenchmark):self.benchmark.connection_stages.append(dict(self.connection_state))
+        self.emit('connection_status',dict(self.connection_state))
+
+    def check_idle_connection(self):
+        """OS status only, no query, keepalive, reset or hidden reconnect."""
+        if not self.transport:return
+        if self.polling or self.benchmark or self.auto_starting:
+            self.idle_health_checked=time.monotonic();return
+        now=time.monotonic();gap=now-self.idle_health_checked
+        if gap<1:return
+        self.idle_health_checked=now
+        status=self.transport.idle_status()
+        if gap>15 or not all(status.get(k) for k in ('open','prompt_synchronized')):
+            reason='Idle connection invalid or possible suspension; explicit reconnect required. '+status.get('reason','')
+            self.disconnect();self.set_polling(False,reason,requires_reconnect=True);self.connection_stage('RECONNECT_REQUIRED',reason);self.emit('notice',reason)
 
     def close_recording(self):
         if self.recorder:
@@ -634,6 +655,9 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         if self.transport: self.transport.close()
         self.transport = None
         if finish_recording: self.close_recording()
+        self.connection_stage('DISCONNECTED','Handle closed; no automatic reconnect')
+        if self.session.data['state']=='CONNECTED' and not self.session.active:
+            self.session.transition('DISCONNECTED','Adapter explicitly closed',adapter_open=False);self.publish_session(True)
         self.emit("connection", {"adapter": "Disconnected", "ecu": "Unavailable", "protocol": self.protocol, "mode": self.mode})
 
     def initialize(self, options):
@@ -668,7 +692,9 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             self.recorder.db.commit()
         self.port = "SIMULATED" if options["simulation"] else options["port"]
         self.adapter, self.protocol = "Unknown", "Unknown"
+        self.connection_stage('OPENING_COM' if not options['simulation'] else 'OPENING_SIMULATION','Opening explicitly selected source; OS pairing not inspected')
         self.transport = Simulator(options.get("scenario", "Normal idle")) if options["simulation"] else SerialTransport(self.port, options.get("baud", 115200))
+        self.connection_stage('HANDLE_OPEN','Port handle open; adapter and ECU not yet verified')
         self.transport.rate = self.rate
         # One application budget, including a new connection/initialization.
         self.transport._last_send_ns=self.last_application_send_ns
@@ -685,6 +711,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             response = self.transaction(cmd)
             if "OK" not in response["raw_text"].upper():
                 raise TransportError(f"Required adapter configuration rejected: {cmd}")
+        self.connection_stage('ADAPTER_INITIALIZED','Adapter identity and existing configuration acknowledged')
         self.emit("connection", {"adapter": self.adapter, "ecu": "Discovering support", "protocol": "Auto", "mode": self.mode})
         for base in (0, 32, 64):
             if self.auto_starting and self.bitmap_conflicts: break
@@ -698,6 +725,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.emit("support", self.support)
         self.emit("support_pages", self.support_pages)
         self.emit("connection", {"adapter": self.adapter, "ecu": "Connected" if self.support else "No verified ECU response", "protocol": self.protocol, "mode": self.mode})
+        self.connection_stage('ECU_VERIFIED' if self.support else 'ECU_UNCONFIRMED','Response address is not authenticated vehicle identity')
+        self.idle_health_checked=time.monotonic()
         self.set_polling(bool(self.support), "Polling" if self.support else "No verified ECU response")
         self.emit_discovery()
 
@@ -790,6 +819,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         if self.session.active or self.recorder or self.replay:
             self.emit('session_rejected','Finish recording / leave replay before standard Connect'); return
         if self.session.data['state']=='CONNECTED' and self.transport and not self.requires_reconnect:
+            if bool(options.get('simulation'))!=(self.mode=='SIMULATED') or not options.get('simulation') and options.get('port')!=self.port:
+                self.emit('session_rejected','Source/port differs from retained connection; Disconnect explicitly first');return
             self.publish_session(True); return
         self.session_stage('CONNECTING','Opening the explicitly configured source; awaiting positive ECU identity',active=False)
         try:
@@ -826,6 +857,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         try:
             profile=options.get('profile',PRESETS[1])
             if profile not in {PRESETS[1],PRESETS[2]}:raise ValueError('Unknown normal session profile')
+            self.session.data.update(profile=profile,sampling_scope='EXPLICIT_CRITICAL_SUBSET' if profile==PRESETS[2] else 'ALL_ELIGIBLE')
             self.full_auto(dict(options,reuse=True,consent=True,preset=profile,
                 ecu=self.session.data['ecu'],session_recording=True))
             self.auto_receipt.data['consent_provenance']='EXPLICIT_START_SESSION_FIXED_READ_ONLY_PROFILE'
@@ -871,7 +903,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         except Exception as exc:
             self.disconnect(finish_recording=False)
             self.session_stage('FAILED','Export/finalization failed; original journal preserved. Use explicit offline export retry.',
-                active=bool(self.recorder),session_id=session_id,export_error=str(exc),retry_export=not bool(self.recorder))
+                active=bool(self.recorder),session_id=session_id,export_error=str(exc),retry_export=not bool(self.recorder),**getattr(exc,'result',{}))
         self.persist_closed_coordinator()
 
     def retry_session_export(self,options):
@@ -889,7 +921,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.persist_closed_coordinator()
 
     def handle(self, action, options):
-        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown'}:
+        if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown','disconnect','system_suspend'}:
             self.emit('notice','Stationary benchmark owns acquisition; stop it first');return
         if self.session.active and action in CONFLICTS and not self.session_internal:
             self.emit('session_rejected','Automatic session owns acquisition; Finish Session first'); return
@@ -964,7 +996,10 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             self.failures = 0
             self.set_polling(True,'Standard discovery monitoring')
             self.emit_discovery(True,'Monitoring supported standard PIDs; vehicle unverified')
-        elif action == "disconnect": self.disconnect()
+        elif action in {'disconnect','system_suspend'}:
+            if self.benchmark:self.finish_benchmark('Explicit Disconnect' if action=='disconnect' else 'Windows suspension; explicit reconnect required')
+            if self.session.active:self.finish_standard_session()
+            self.disconnect()
         elif action == "stop":
             if self.auto_receipt: self.auto_stage('STOPPED','Stopped by user; no automatic retry')
             self.capture_mode = False
@@ -1075,6 +1110,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                     try:self.benchmark_tick()
                     except Exception as exc:self.finish_benchmark('Aborted: '+str(exc))
                     continue
+                self.check_idle_connection()
                 if self.polling and self.transport and not self.stop_io.is_set():
                     pids = list(self.capture_weights) if self.capture_mode else [p for p in self.selected if p in LIVE_PIDS and p in self.transport.supported]
                     if self.discovery_active and not self.capture_mode:
