@@ -95,6 +95,12 @@ def render_html(report,selection=None,detailed=False):
     if report.get('analysis_origin'): parts.append('<p>'+escape(report['analysis_origin'])+': saved results have not been revalidated against the original ZIP.</p>')
     emitted=False
     for si,session in enumerate(report['sessions']):
+        if not session['groups'] and selection is None:
+            emitted=True
+            parts.extend(['<h2>Session '+str(si+1)+' · no observed ECU/source group</h2>',
+                '<p>Original checksum verification recorded: '+escape(session.get('checksum_verified',False))+'. Total recorded transactions: '+escape(session['transactions'])+'.</p>',
+                '<p>No ECU support, numeric measurements or physical capacity conclusion can be established from this session. A preflight failure before transmission is not a measured ECU failure.</p>'])
+            parts.extend('<p>'+escape(m)+'</p>' for m in session['missing_evidence']+session['contradictions']+session['transaction_errors'])
         for gi,g in enumerate(session['groups']):
             if selection is not None and (si,gi)!=tuple(selection): continue
             emitted=True; rows=g['matrix']; valid=sum(r.get('valid_framing',0) for r in rows); invalid=sum(r.get('invalid_framing',0) for r in rows)

@@ -148,11 +148,23 @@ def complete_row(e, g, bitmap, snapshots, ambiguous=False):
         independent_verification='UNVERIFIED')
 
 
-def read_bundle(path):
-    path = Path(path)
+def read_bundle(path,*,_nested=False):
+    path = path if hasattr(path,'read') else Path(path)
     with zipfile.ZipFile(path) as archive:
         infos = archive.infolist()
         names = [i.filename for i in infos]
+        if 'run-export.json' in names:
+            if _nested:raise ValueError('Nested run wrappers are not allowed')
+            allowed={'original-research.zip','report.json','report.html','source-report.json','source-report.html','run-metadata.json','run-export.json','annotations.json','annotations.html'}
+            if len(names)!=len(set(names)) or set(names)-allowed or not {'original-research.zip','run-export.json'}<=set(names):raise ValueError('Invalid private run wrapper members')
+            if any(i.file_size>MAX_MEMBER or i.flag_bits&1 or (i.external_attr>>16)&0o170000==0o120000 for i in infos) or sum(i.file_size for i in infos)>MAX_TOTAL:raise ValueError('Run wrapper exceeds offline limits')
+            info=json.loads(archive.read('run-export.json'))
+            checks=info.get('members',{})
+            if info.get('kind')!='MOKKA_PRIVATE_RUN' or set(checks)!=set(names)-{'run-export.json'}:raise ValueError('Invalid wrapper manifest')
+            for name,sha in checks.items():
+                if hashlib.sha256(archive.read(name)).hexdigest()!=sha:raise ValueError('Run wrapper checksum mismatch')
+            import io
+            return read_bundle(io.BytesIO(archive.read('original-research.zip')),_nested=True)
         if len(names) != len(set(names)) or set(names) - MEMBERS:
             raise ValueError('Duplicate or unrecognized bundle members; root-level Research Bundle expected')
         if any(i.file_size > MAX_MEMBER or i.flag_bits & 1 for i in infos) or sum(i.file_size for i in infos) > MAX_TOTAL:
