@@ -1,5 +1,15 @@
 # Architecture
 
+## v0.2.11 ownership, private storage and managed versions
+
+The existing acquisition thread owns the only transport. Successful benchmark finalization closes the journal, disables polling/discovery, clears the operation deadline, verifies private export and reconciles the normal session coordinator to CONNECTED. Only a healthy open, prompt-synchronized handle can remain CONNECTED IDLE. Subsequent explicit starts clear cached support and perform current recorded preflight. Idle checks read OS handle/input-buffer status only; they never transmit. Native Windows suspend notification submits a bounded close action. Stop/error/invalid prompt/removal/shutdown closes the handle, including before slow derived export on abort. Pairing, COM handle, adapter and ECU evidence are separate stages; OS pairing is not inferred.
+
+`library.py` owns Reports plus a local SQLite index (WAL/FULL), isolated from immutable legacy journals/database. Original start UTC determines the explicit Europe/Athens date tree. New exports stage and fsync before a fresh-directory rename and index registration. PARTIAL retains originals and permits offline repair. Recovery validates managed paths and hashes. Copy migration checkpoints each logical group and never renames sources. Wrapper identity is the inner Research Bundle identity; selecting it twice is rejected. Annotations are separate local records and optional escaped HTML/JSON companions, never edits to the original journal.
+
+History and version jobs use bounded offline executors with no transport. `versions.py` accepts only official exact-tag SHA-verified portable packages, writes new staging/build folders, smoke-tests a fresh simulation data root, then changes current/previous pointers after approval of the exact preview. It rejects unmanaged additions, links/junctions, unsafe archives, changed sources, concurrent operation locks and unverified builds. There is no recursive cleanup implementation. Raw data stays outside installations; interrupted stages are retained for inspection.
+
+`analysis/quality.py` computes recorded field distributions/cadence and encoding limits without physical diagnosis. Higher-rate feasibility has no transport import and zero transmissions; the live limiter and command policy are unchanged. The sections below describe historical implementation contracts; v0.2.11 supersedes v0.2.10's successful-benchmark disconnect and flat export paths.
+
 ## v0.2.10 supervised Benchmark
 
 `BenchmarkWorkflow` is a mixin of the existing serialized acquisition worker; `AutoBenchmark` owns its canonical phase/run/time state. The visible sidebar panel projects acknowledgments and submits one start/stop action. No new serial worker, background connection or duplicate UI acquisition controller exists. Normal sessions and manual acquisition remain mutually exclusive with benchmarking.

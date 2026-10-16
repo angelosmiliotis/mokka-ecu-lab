@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.11 — Connected idle, private report history and managed rollback
+
+- Successful Benchmark retains a healthy synchronized connection by default, with no idle traffic; every next run refreshes recorded evidence. Explicit Disconnect, Stop, serial errors, port loss, suspension and shutdown close deterministically. COM-open failures are separate from ECU/measurement failures.
+- History / Reports: one folder per logical run, Athens local date with original UTC, original ZIP and JSON/HTML, checksum metadata, search/filters, labels, offline retry/compare, one private wrapper ZIP and uncertain user annotations. Legacy migration is exact-preview, approved COPY only, resumable and idempotent; original files stay in place.
+- App Versions: official release SHA verification, isolated staging/startup validation, exact install/activation previews, current/previous pointers and rollback. Scope is explicitly selected folders; no cleanup or deletion API.
+- Offline reports add bitmap coverage provenance, recorded field cadence, MAP byte-ceiling caveats and DPF prior-sample age sensitivity. No new numeric decoder, LIVE command or rate permission. Future higher-rate work remains a locked-off design and pure synthetic arithmetic.
+- Synthetic regression, native Windows DPI checks, real packaged-process validation, private replay and source/executable parity are release gates. Real vehicle files and analyses are excluded from all public artifacts.
+
 ## 0.2.10 — One-click sixty-second Benchmark
 
 - Permanent Benchmark sidebar page: select 1/2/3/4 req/s, Start BENCH, automatic connection/current bitmap and positive pretest, stationary speed checks, true 60-second measurement, private verified export and disconnect. Preflight is separate and bounded; fixed 240-send cap replaces premature 48-send termination on the new workflow.

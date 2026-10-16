@@ -3,6 +3,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 datas = [('mokka_ecu_lab/sensors/standard.json', 'mokka_ecu_lab/sensors')]
 datas += collect_data_files('mokka_ecu_lab')
+datas += collect_data_files('tzdata') # explicit Windows IANA Europe/Athens history/DST data
 
 
 a = Analysis(
@@ -10,7 +11,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=['mokka_ecu_lab.research.future_benchmark'], # offline arithmetic only; no transport activation
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

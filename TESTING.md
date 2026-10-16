@@ -1,5 +1,28 @@
 # Testing and vehicle validation
 
+## Version 0.2.11 release validation
+
+**611 tests passed** in the final complete regression (322.58 s). Constructed cases cover one-handle 2→3→4 benchmarks, fresh context evidence/deadlines, zero idle sends, normal Start after Benchmark, explicit disconnect, Stop/error/export failure, WinError121 before send, invalid prompt, port loss, suspension, long active acquisition versus true idle suspension, shutdown and journal recovery. Existing allowlist, ISO-TP and aggregate-wire-budget tests remain in force.
+
+**320 native Windows geometry checks** passed at actual Qt pixel ratios 1/1.25/1.5 across 1280×720, 1366×768, 1536×864 and 1920×1080: 52 Benchmark, 48 Comprehensive-session, 16 Critical-session, 96 main-page, 60 offline-view, 36 History/Versions and 12 fake COM-open failure checks. All **27 contact sheets** were visually inspected, with separate full-size review of minimum-size Benchmark/History and version previews. Top-level horizontal overflow was absent; vertical pages and technical tables can scroll. Keyboard-accessible labels and existing shortcuts remain; History/Versions add Ctrl+Alt+H/V. Public screenshots contain only constructed data and isolated public-build copies.
+
+The final executable matches **57 compiled project modules**, with zero mismatches. **Eight actual packaged processes exited 0**: two startups, legacy Full Auto, original thirteen-PID Session, expanded 36-PID Comprehensive, thirteen-PID Critical, sequential 2→3→4 Benchmark and maintenance. The maintenance process also launched both prior official public Windows builds in fresh simulation data roots (child exits **0,0**), installed new isolated copies, activated/rolled back verified pointers, migrated eighteen constructed companions to six groups, and verified wrapper identity without OBD requests. Paths included Greek characters and spaces. Native 150% maintenance used cached official metadata from a preceding successful online verification after a transient HTTPS timeout; the final packaged test fetched official release metadata successfully. Unknown/changed archives, denied/unavailable paths, running builds, interrupted locks and unsafe links remain fail-closed.
+
+Final packaged synthetic benchmarks measured **60.016 / 60.046 / 60.015 s**, sent **115 / 171 / 223** at selected **2 / 3 / 4 req/s**, and retained minimum send gaps **500 / 343 / 250 ms**. One transport/context was reused, idle requests were zero, exports verified, and final explicit Disconnect closed it. Counts include the bounded end-of-window allowance and application/adapter overhead; they are not vehicle capacity measurements. Normal Session still follows Connect → Start Session → Finish Session, exports automatically and disconnects.
+
+Source/executable OBD, DPF and research JSON/HTML were byte-identical in **54 comparisons**, including constructed drive/Benchmark/wrapper inputs and separate private replay outside Git. All private originals were independently hashed/redecoded and remained unchanged; none is distributed. Copy-only migration on isolated private copies also retained every original byte. No real cleanup, source-file migration, destructive update or personal-data relocation was performed.
+
+Release assets contain the public source tree, executable/runtime and SHA-256 sums only. Public validation is in [the constructed results](samples/v0.2.11-validation.json); [screenshots](docs/screenshots/v0.2.11) and [operator instructions](docs/V0211_WORKFLOW.md) show the workflow. Physical v0.2.11 Bluetooth/ECU validation awaits new field evidence. Six-byte 017A, unknown 018C layouts, independent calibration, 0101/019D and any >4/s LIVE operation remain unverified/disabled.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\verify_benchmark.py --sequential --output-dir release\fresh-benchmark --data-dir C:\MokkaSynthetic\fresh-benchmark --scale 1
+.\.venv\Scripts\python.exe scripts\verify_session.py --expanded --output-dir release\fresh-session --scale 1
+.\.venv\Scripts\python.exe scripts\verify_packaged.py --exe PATH_TO_BUILD\MokkaECULab.exe --output-dir C:\MokkaSynthetic\fresh-packaged --maintenance-reference-zips PATH_TO_OFFICIAL_v0.2.9_ZIP PATH_TO_OFFICIAL_v0.2.10_ZIP
+```
+
+Use new synthetic folders only. The maintenance acceptance copies explicitly selected public builds and never modifies old installations. Historical validation below applies to its original version; v0.2.11 supersedes successful-benchmark disconnect and flat export paths.
+
 ## Version 0.2.10 software and packaged validation
 
 **571 tests passed** in the complete regression run (258.85 s). After the final compact-sidebar adjustment, **19 targeted UI tests passed**. New synthetic cases cover all four fixed benchmark rates, fresh support and same-ECU positive preflight, speed checks, a full monotonic 60-second window, phase separation, deadlines and receive allowance, truthful failure counts, conflict rejection, Stop, partial preservation, offline export retry and consecutive-run comparisons. The strict synthetic 15-byte 018C case remains undecoded. No real vehicle bytes or chronology are public fixtures.

@@ -1,6 +1,8 @@
 # Mokka ECU Lab
 
-Version **0.2.10** adds a permanent **Benchmark** sidebar page: choose **1/2/3/4 requests per second** (default 2), press **Start BENCH**, and let the app connect, verify current support/positives and stationary speed, measure for **60 seconds after preflight**, verify private export and disconnect. Normal **Connect → Start Session → Finish Session** stays simple; Comprehensive remains the all-eligible default, with an optional explicit DPF + Turbo critical subset. One serialized worker retains the unchanged allowlist and **4 total req/s** ceiling. [Benchmark operation, outputs and next field test](docs/V0210_BENCHMARK.md). [Research review and unresolved sensor layouts](research/v0.2.10-evidence-review.md).
+Version **0.2.11** keeps a successful Benchmark **CONNECTED IDLE**, with zero idle requests and fresh preflight on each explicit next run. Disconnect remains visible; Stop, errors, suspension and port loss close the handle. **History / Reports** groups each run's ZIP, JSON and HTML, with offline comparisons and approved copy-only legacy import. **App Versions** installs verified official ZIPs into new managed folders and maintains CURRENT / ROLLBACK pointers. Personal data and old builds are preserved. Normal **Connect → Start Session → Finish Session**, the allowlist, one serialized worker and **4 total req/s** ceiling remain unchanged. [Workflow and next field test](docs/V0211_WORKFLOW.md), [research boundaries](research/v0.2.11-review.md), [validation](TESTING.md).
+
+The historical v0.2.10 workflow disconnected after every benchmark. v0.2.11 supersedes that behavior for successful runs with **Keep connected after success** selected (default ON).
 
 The following v0.2.9 description records the preceding scope; its Advanced-only benchmark UI and 48-send bound are superseded by the new visible sixty-second workflow.
 
@@ -25,18 +27,13 @@ The application always starts disconnected. A first launch selects Simulation; s
 Install Python 3.12 or newer from [python.org](https://www.python.org/downloads/windows/) with the Python launcher. In PowerShell:
 
 ```powershell
-Set-Location -LiteralPath 'C:\Users\angel\OneDrive\Υπολογιστής\MOKKA ECU LAB'
+Set-Location -LiteralPath 'C:\Projects\Mokka ECU Lab'
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e '.[dev]'
 .\.venv\Scripts\python.exe -m mokka_ecu_lab
 ```
 
-Use your copied project path on another machine. The current computer uses a bundled Python 3.12 runtime because its `python` command points to the Windows Store placeholder. If rebuilding the environment here without installing another Python:
-
-```powershell
-& 'C:\Users\angel\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e '.[dev]'
-```
+Replace the example project path with your copied checkout. Use an installed Python 3.12+ runtime; if `python` opens the Windows Store placeholder, use the Python launcher or the explicit path of your installed runtime.
 
 No activation or PowerShell execution-policy changes are required. `launch.ps1` is also available if your policy allows scripts.
 
