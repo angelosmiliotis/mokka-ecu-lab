@@ -19,7 +19,7 @@ FIELDS = {'rpm':'rpm','speed':'km/h','load':'%','maf':'g/s','map':'kPa','coolant
 LIMITS = ('OBSERVATIONAL — NOT CAUSAL. Sport state is USER_REPORTED, never ECU-confirmed. '
           'The selected uncertainty range is user-defined, not a validated bound on actual toggle timing. '
           'RPM, load, speed, temperature and driver inputs can differ. MAP is absolute manifold pressure; '
-          '255 kPa is an encoding ceiling and may be censored. Cached context is asynchronous, with age; '
+          'Byte 255 can be an encoding ceiling; its physical maximum depends on current range configuration and may be censored. Cached context is asynchronous, with age; '
           'no interpolation, gear/pedal/commanded boost or sub-second turbo-lag conclusion. '
           'Serial samples are dependent; descriptive ranges are not causal confidence intervals.')
 

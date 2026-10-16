@@ -104,6 +104,8 @@ def inventory(records,identity):
     output=[]
     for key,g in sorted(groups.items()):
         bitmap=g['bitmap'];declared=sorted(set().union(*(supported_pids(v,p) for p,v in bitmap.accepted.items()))-BITMAP_PIDS)
+        pending=[p+32 for p,v in bitmap.accepted.items() if p<224 and p+32 in supported_pids(v,p) and p+32 not in bitmap.accepted]
+        coverage='CONFLICTED' if bitmap.conflicts else 'UNKNOWN' if not bitmap.accepted else 'PARTIAL' if pending else 'COMPLETE_ADVERTISED_CHAIN'
         rows=[]
         for pid in range(1,256):
             if pid in BITMAP_PIDS:continue
@@ -126,6 +128,7 @@ def inventory(records,identity):
             outside_legacy_scope_count=sum(p not in LEGACY_PIDS for p in declared),
             implemented_declared_count=sum(p in definitions for p in declared),
             bitmap_pages=[f'{p:02X}' for p in sorted(bitmap.accepted)],bitmap_ledger=g['ledger'],
+            bitmap_coverage=coverage,unread_advertised_pages=[f'{p:02X}' for p in pending],inventory_scope_note='Declared count covers recorded anchored pages only. Partial Benchmark discovery is not evidence that Comprehensive ECU support disappeared.',
             contradictions=bitmap.problems,rows=rows,opening_sends_requests=False))
     return output
 
@@ -171,11 +174,14 @@ def performance(records,identity):
 
 def analyze_obd(paths):
     if not 1<=len(paths)<=MAX_SESSIONS:raise ValueError('Choose one to sixteen private bundles')
-    sessions=[]
+    sessions=[];seen=set()
     for path in paths:
-        identity,members=read_bundle(path);records=strict_records(members)
+        identity,members=read_bundle(path)
+        if identity in seen:raise ValueError('Duplicate original evidence selected, possibly through a run wrapper')
+        seen.add(identity);records=strict_records(members)
         from .benchmark import benchmark_summary
-        sessions.append(dict(evidence_id=identity,checksum_verified=True,inventory=inventory(records,identity),performance=performance(records,identity),benchmark=benchmark_summary(records,members,identity)))
+        from .quality import field_quality
+        sessions.append(dict(evidence_id=identity,checksum_verified=True,inventory=inventory(records,identity),performance=performance(records,identity),benchmark=benchmark_summary(records,members,identity),field_quality=field_quality(members,records)))
     histories=defaultdict(list);comparisons=[]
     for s in sessions:
         for g in s['inventory']:histories[(g['ecu'],g['mode'],g['source_kind'])].append(g)
@@ -188,6 +194,7 @@ def analyze_obd(paths):
             comparisons.append(dict(ecu=key[0],mode=key[1],source_kind=key[2],before_evidence_id=before['evidence_id'],after_evidence_id=after['evidence_id'],
                 newly_advertised_ids=sorted(new-old),no_longer_advertised=[dict(pid=p,new_state=states[p]) for p in sorted(old-new)],
                 unchanged_advertised_ids=sorted(old&new),order='Caller-selected bundle order, not inferred chronology',
+                bitmap_coverage_pair=[before['bitmap_coverage'],after['bitmap_coverage']],complete_coverage_pair=before['bitmap_coverage']==after['bitmap_coverage']=='COMPLETE_ADVERTISED_CHAIN',
                 identity_limit='CAN response address comparison only; exact ECU/calibration identity not established',
                 inference_limit='Missing/conflicting bitmap evidence is UNKNOWN, not evidence of lost support; traces never joined'))
     from .benchmark import compare_benchmarks
@@ -204,12 +211,16 @@ def export_obd_report(report,path,inputs=()):
         if session.get('benchmark'):
             b=session['benchmark'];blocks.append('<h2>Fixed 60-second benchmark</h2><p>'+escape(f"Run {b['run_id']} | {b['mode']} | ECU {b['ecu']} | requested {b['requested_rate']} req/s | actual {b['actual_sustained_rate']} req/s | measured {b['measurement_duration_seconds']} s | sent {b['sent_requests']} | completed {b['completed']}")+'</p><p>'+escape(b['interpretation'])+'</p><details><summary>Preflight, phase and outcome provenance</summary><pre>'+escape(json.dumps(b,indent=2))+'</pre></details>')
         for g in session['inventory']:
-            blocks.append('<h2>'+escape(g['ecu']+' / '+g['mode']+' / '+g['source_kind'])+'</h2><p>'+escape(f"Declared {g['declared_count']} non-bitmap identifiers; {g['outside_legacy_scope_count']} outside legacy scope. Support is not observation.")+'</p>')
+            blocks.append('<h2>'+escape(g['ecu']+' / '+g['mode']+' / '+g['source_kind'])+'</h2><p>'+escape(f"Declared {g['declared_count']} non-bitmap identifiers; {g['outside_legacy_scope_count']} outside legacy scope. Bitmap coverage {g['bitmap_coverage']}. Support is not observation. "+g['inventory_scope_note'])+'</p>')
             blocks.append('<table><tr><th>Request</th><th>Definition</th><th>Support</th><th>Observed</th><th>Facts / provenance</th></tr>')
             for r in g['rows']:
                 if r['advertised_support']!='SUPPORTED' and not r['response_observed']:continue
                 blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (r['request'],r['name'],r['advertised_support'],r['response_observed'],'; '.join(r['facts'])))+'</tr>')
             blocks.append('</table><details><summary>Original bitmap ledger</summary><pre>'+escape(json.dumps(g['bitmap_ledger'],indent=2))+'</pre></details>')
+        for q in session.get('field_quality',[]):
+            blocks.append('<h2>Recorded field cadence / quality · '+escape(q['ecu'])+'</h2><p>'+escape(q['field_basis'])+'</p><p>'+escape(f"MAP byte ceiling samples {q['map_byte_ceiling_samples']} / numeric samples {q['map_numeric_samples']}; current encoding maximum {q['map_encoding_max_kpa']} kPa. "+q['map_limit'])+'</p><p>'+escape(q['vgt_limit']+' '+q['interpretation'])+'</p><table><tr><th>Field</th><th>Samples</th><th>Min / median / max</th><th>Cadence mean / max s</th></tr>')
+            for f in q['fields']:blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (f['sensor_id']+' / '+f['unit'],f['samples'],f"{f['minimum']} / {f['median']} / {f['maximum']}",f"{f['sampling_gap_seconds']['mean']} / {f['sampling_gap_seconds']['maximum']}"))+'</tr>')
+            blocks.append('</table>')
         for g in session['performance']:
             d=g['latency_ms'];blocks.append('<h2>Communication summary · '+escape(g['mode'])+'</h2><p>'+escape(f"Sent {g['transmitted_requests']} | observed count/span {g['actual_transmitted_rate_hz']} req/s | latency p50 {d['p50']} / p95 {d['p95']} / p99 {d['p99']} ms | spacing violations {g['hard_four_hz_spacing_violations']}")+'</p><p>'+escape(str(g['categories']))+'</p><table><tr><th>ECU/request</th><th>Sent</th><th>Latency p50 / p95 / p99 ms</th><th>Sampling mean / max s</th></tr>')
             for r in g['per_ecu_pid']:

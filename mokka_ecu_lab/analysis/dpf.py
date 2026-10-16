@@ -54,8 +54,15 @@ def dynamic_statistics(points):
     for label,lo,hi in (('COOLANT_BELOW_60',-100,60),('COOLANT_60_TO_80',60,80),('COOLANT_80_AND_ABOVE',80,1000)):
         subset=[p for p in points if p['context']['coolant']['value'] is not None and lo<=p['context']['coolant']['value']<hi]
         thermal[label]=dict(n=len(subset),raw_first_word_range=[min(p['AB_big_endian_HYPOTHESIS'] for p in subset),max(p['AB_big_endian_HYPOTHESIS'] for p in subset)] if subset else None)
+    sensitivity={}
+    for gate in (1,2,5,12):
+        sensitivity[str(gate)]={}
+        for name in CONTEXT:
+            subset=[p for p in points if p['context'][name].get('prior_value') is not None and p['context'][name]['age_seconds'] is not None and 0<=p['context'][name]['age_seconds']<=gate]
+            x=[p['AB_big_endian_HYPOTHESIS'] for p in subset];y=[p['context'][name]['prior_value'] for p in subset]
+            sensitivity[str(gate)][name]=dict(n=len(subset),pearson=pearson(x,y),spearman=pearson(ranks(x),ranks(y)))
     return dict(population=population,population_samples=len(points),unique_payloads=len({p['payload_hex'] for p in points}),observed_first_word_increment_gcd=math.gcd(*differences) if differences else None,
-        motion_group_descriptive=groups,coolant_context_bins=thermal,group_limit='Descriptive age-gated groups; thresholds are labels, not validated operating/health criteria. No causal model selected.',
+        motion_group_descriptive=groups,coolant_context_bins=thermal,age_gate_sensitivity_seconds=sensitivity,group_limit='Descriptive age-gated groups; thresholds are labels, not validated operating/health criteria. No causal model selected.',
         quantization='Observed raw-integer spacing only; no physical unit or universal resolution',
         payload_byte_ranges=[dict(byte=i,minimum=min(bytes.fromhex(p['payload_hex'])[i] for p in points),maximum=max(bytes.fromhex(p['payload_hex'])[i] for p in points),
             always_zero=all(bytes.fromhex(p['payload_hex'])[i]==0 for p in points)) for i in range(6)],correlations=correlations)
@@ -63,9 +70,11 @@ def dynamic_statistics(points):
 
 def analyze_dpf(paths):
     if not paths or len(paths)>MAX_SESSIONS: raise ValueError('Choose one to sixteen private bundles')
-    groups=[]
+    groups=[];identities=set()
     for path in paths:
-        identity,members=read_bundle(path); data=load_phase_data(path)
+        identity,members=read_bundle(path)
+        if identity in identities:raise ValueError('Duplicate original evidence selected, possibly through a run wrapper')
+        identities.add(identity);data=load_phase_data(path)
         sources={(g['ecu'],g['mode'],g['source_kind']):g['fields'] for g in data['groups']}
         indices={key:{name:([p['monotonic_ns'] for p in fields.get(name,[])],fields.get(name,[])) for name in CONTEXT} for key,fields in sources.items()}
         rows=defaultdict(list); rejected=0; candidates=[]
@@ -100,6 +109,7 @@ def analyze_dpf(paths):
                     prior=values[pos] if pos>=0 else None
                     age=(ns-prior['monotonic_ns'])/1e9 if prior else None
                     context[name]=dict(value=prior['value'] if prior and age<=5 else None,
+                        prior_value=prior['value'] if prior else None,
                         unit={'rpm':'rpm','maf':'g/s','map':'kPa','load':'%','speed':'km/h','coolant':'°C'}[name],
                         timestamp=prior['timestamp'] if prior else None,age_seconds=age,
                         state='PRIOR_ASYNCHRONOUS' if prior and age<=5 else 'MISSING_OR_STALE',simultaneous=False)

@@ -11,12 +11,13 @@ def benchmark_summary(records,members,identity):
     sent=[r for r,p in measured if r.get('sent')]
     first=sent[0] if sent else measured[0][0] if measured else dict(benchmark_run_id=checkpoint.get('session_id'),benchmark_ecu=checkpoint.get('ecu'),mode=checkpoint.get('mode'),source_kind=checkpoint.get('source_kind'),benchmark_requested_rate=checkpoint.get('rate'))
     metadata=checkpoint or {}
+    from mokka_ecu_lab.library import run_facts
     elapsed=metadata.get('measurement_duration_seconds')
     perf=performance(measured,identity)
     return dict(evidence_id=identity,run_id=first.get('benchmark_run_id'),ecu=first.get('benchmark_ecu'),
         mode=first.get('mode'),source_kind=first.get('source_kind'),requested_rate=first.get('benchmark_requested_rate'),
         measurement_duration_seconds=elapsed,actual_sustained_rate=len(sent)/elapsed if elapsed and elapsed>0 else None,
-        sent_requests=len(sent),completed=metadata.get('completed',False),reason=metadata.get('reason','Legacy checkpoint unavailable'),
+        sent_requests=len(sent),completed=metadata.get('completed',False),reason=metadata.get('reason','Legacy checkpoint unavailable'),outcome=run_facts(summary)['outcome'],
         pids=sorted({r['command'] for r,p in measured if r.get('sent')}),
         expected_pids=['010B','010C','010D','0110'],fixed_speed_cadence='One per four measurement sends',
         preflight_sent_requests=sum(r.get('sent') is True and r.get('benchmark_phase')=='PREFLIGHT' for r,p in records),
@@ -34,7 +35,7 @@ def compare_benchmarks(sessions):
         if before['evidence_id']==after['evidence_id']:continue
         same_source=all(before.get(k)==after.get(k) for k in ('ecu','mode','source_kind'))
         same_mix=before['pids']==after['pids']==before['expected_pids']
-        categories=after['categories'];ok=after['completed'] and same_source and same_mix and not any(v for k,v in categories.items() if k!='OK')
+        categories=after['categories'];ok=before['completed'] and after['completed'] and same_source and same_mix and not any(v for k,v in categories.items() if k!='OK') and not any(v for k,v in before['categories'].items() if k!='OK')
         rate=after['requested_rate']
         result.append(dict(before_run=before['run_id'],after_run=after['run_id'],same_address_source=same_source,
             same_pid_mix=same_mix,same_requested_rate=before['requested_rate']==rate,complete_pair=before['completed'] and after['completed'],
