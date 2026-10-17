@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.13 — Session connected idle and gated experimental byte engine
+
+- Finish stops future polling, preserves a clean bounded in-flight reply, closes recording and verifies export before retaining a healthy CONNECTED IDLE handle. Explicit Disconnect remains visible. Unsafe prompt/port/I/O, Stop, suspend, shutdown and export failures close or isolate resources truthfully with offline recovery.
+- Every explicit Session/Benchmark gets fresh protocol/ECU/bitmap/configuration and positive evidence in a new run context without resetting the shared send clock. Source/port/baud/ECU changes and unconfirmed driver cleanup cannot silently reopen or reuse stale evidence.
+- Correlated Comprehensive allocation retains every eligible PID while prioritizing DPF/turbo dynamics and recurring NOx/SCR/reagent context under the same 4/s budget. Slow status still recurs; per-PID cadence costs and asynchronous ages remain explicit. Legacy and Critical profiles remain selectable.
+- Separate fixed 5/s experimental request engine executes and validates fragmented fake COM byte exchanges, with twelve <=4/s preparation requests, a 250 ms transition, at most 300 measured requests/60 virtual seconds, one ledger and fail-closed aborts. Physical experimental LIVE has no backend and remains LOCKED pending separate reviewed implementation, safety assessment and exact operator approval.
+- Normal read-only commands/rate policy, numeric decoders, stable CURRENT/ROLLBACK launcher, flat private Reports and approved workspace archive are preserved. Synthetic-only regressions, native Windows/packaged tests, private replay/parity and publication privacy audit are release gates.
+
 ## 0.2.12 — Workspace, stable launcher and flat private Reports
 
 - Separate Workspace page inventories one exact release folder, protects tracked/running/private evidence, and previews every path, size and hash. Approved same-volume quarantine and restore preserve bytes, support interruption recovery and never delete files. Quarantine frees zero disk bytes.
