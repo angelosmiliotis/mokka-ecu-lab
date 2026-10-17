@@ -19,7 +19,9 @@ def regular_files(folder,limit=6000):
     folder=Path(folder)
     if linked(folder):raise ValueError('Linked folder is not a managed tree')
     count=0
-    for base,dirs,files in os.walk(folder,followlinks=False):
+    def fail(error):
+        raise error
+    for base,dirs,files in os.walk(folder,followlinks=False,onerror=fail):
         for name in dirs+files:
             if linked(Path(base)/name):raise ValueError('Managed tree contains a symbolic link/junction')
         for name in files:

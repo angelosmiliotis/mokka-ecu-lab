@@ -8,6 +8,52 @@ from .local_paths import inside,regular_files
 
 ASSETS=('original-research.zip','report.json','report.html')
 PRESERVED=('source-report.json','source-report.html')
+COMPANIONS=ASSETS+('run-metadata.json',)
+BUCKETS=('Drives','Benchmarks','FailedTests')
+
+
+class MigrationCancelled(RuntimeError):
+    """An explicit cancellation preserves sources and verified copied files."""
+
+
+def _approved(plan,token):
+    check=dict(plan);actual=check.pop('approval_token',None)
+    if actual!=token or actual!=hashlib.sha256(json.dumps(check,sort_keys=True).encode()).hexdigest():
+        raise ValueError('Explicit approval of this exact preview is required')
+
+
+def _preview(plan):
+    plan['approval_token']=hashlib.sha256(json.dumps(plan,sort_keys=True).encode()).hexdigest();return plan
+
+
+def _run_identity(summary,members):
+    journal=summary.get('original_journal_sha256') or hashlib.sha256(members['raw-redacted.jsonl']).hexdigest()
+    return hashlib.sha256((str(summary['session_id'])+':'+journal).encode()).hexdigest(),journal
+
+
+def _run_location(summary,key):
+    started=datetime.fromisoformat(summary['started'])
+    if started.tzinfo is None:raise ValueError('Original UTC start needs an explicit timezone')
+    local=started.astimezone(ZoneInfo('Europe/Athens'));facts=run_facts(summary)
+    bucket='FailedTests' if facts['outcome']!='COMPLETED' else 'Benchmarks' if facts['kind']=='BENCHMARK' else 'Drives'
+    label='FAILED_BENCH_COM' if facts['outcome']=='FAILED_COM_OPEN' else 'BENCH_'+str(facts['rate']).replace('.0','')+'rps' if facts['kind']=='BENCHMARK' else 'DRIVE'
+    return local,facts,Path(bucket)/(local.strftime('%Y-%m-%d_%H-%M-%S_')+label+'_'+key[:16])
+
+
+def _duration(row):
+    value=row.get('duration_seconds')
+    if type(value) in (int,float) and __import__('math').isfinite(value) and value>=0:return value
+    try:return max(0,(datetime.fromisoformat(row['ended_utc'])-datetime.fromisoformat(row['started_utc'])).total_seconds())
+    except (ValueError,TypeError,KeyError):return None
+
+
+def recent_title(row):
+    """A human title is a projection; immutable identities and status stay intact."""
+    local=datetime.fromisoformat(row['started_local']);stamp=f'{local.day:02d} {local.strftime("%b %H:%M")}'
+    kind=('BENCH '+str(row['rate']).removesuffix('.0')+'/s') if row['kind']=='BENCHMARK' else 'DRIVE'
+    duration=_duration(row);span='duration unavailable' if duration is None else f'{int(duration)//60}m{int(duration)%60:02d}s'
+    outcome='PASS' if row['status']=='COMPLETED' else row['status']
+    return ' · '.join((stamp,kind,span,outcome))
 
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -57,6 +103,15 @@ class ReportLibrary:
     def stage(self):
         p=self._path('.staging/'+uuid.uuid4().hex);p.mkdir(parents=True);return p
 
+    def _discard_owned_scratch(self,stage):
+        """Remove only this call's new transient copies, never a report or input."""
+        stage=self._path(Path(stage).relative_to(self.reports))
+        if stage.parent!=self.reports/'.staging' or len(stage.name)!=32 or any(c not in '0123456789abcdef' for c in stage.name):raise ValueError('Not owned scratch')
+        files=list(regular_files(stage,limit=8))
+        if any(p.parent!=stage or p.name not in COMPANIONS+PRESERVED for p in files):raise ValueError('Unknown scratch contents preserved')
+        for p in files:p.unlink()
+        stage.rmdir()
+
     def rows(self,query=''):
         with self.db() as db:rows=[dict(r) for r in db.execute('SELECT * FROM runs ORDER BY json_extract(metadata,"$.started_utc") DESC,id')]
         result=[]
@@ -70,35 +125,49 @@ class ReportLibrary:
         if found is None:raise ValueError('Unknown library run')
         return found
 
-    def _register(self,folder,metadata,source=None):
+    def _register(self,folder,metadata,source=None,*,rebase=False):
         relative=folder.relative_to(self.reports).as_posix()
         with self.db() as db:
-            db.execute('INSERT INTO runs(id,path,metadata) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata',(metadata['library_id'],relative,json.dumps(metadata)))
+            statement='INSERT INTO runs(id,path,metadata) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata'
+            if rebase:statement+=',path=excluded.path'
+            db.execute(statement,(metadata['library_id'],relative,json.dumps(metadata)))
             if source:db.execute('INSERT OR IGNORE INTO imports VALUES(?,?,?)',(source['sha256'],metadata['library_id'],source['path']))
+
+    def _metadata_at(self,folder):
+        """Verify an immutable managed leaf before trusting identity or rebasing."""
+        from .research.evidence import read_bundle
+        folder=self._path(Path(folder).relative_to(self.reports))
+        paths=list(regular_files(folder,limit=8))
+        if any(p.parent!=folder or p.name not in COMPANIONS+PRESERVED for p in paths):raise ValueError('Unknown files in report folder; no migration action')
+        metadata=json.loads((folder/'run-metadata.json').read_text(encoding='utf-8'))
+        if not isinstance(metadata,dict) or not isinstance(metadata.get('hashes'),dict) or ASSETS[0] not in metadata['hashes']:raise ValueError('Incomplete managed report metadata')
+        for name,sha in metadata['hashes'].items():
+            if name not in ASSETS+PRESERVED or digest(inside(folder,folder/name))!=sha:raise ValueError('Library asset changed: '+name)
+        if {p.name for p in paths}!={*metadata['hashes'],'run-metadata.json'}:raise ValueError('Report metadata file coverage differs from folder')
+        if metadata.get('status')!='EXPORT_PARTIAL' and not set(ASSETS)<=set(metadata['hashes']):raise ValueError('Completed report is missing a companion')
+        identity,members=read_bundle(folder/ASSETS[0]);summary=json.loads(members['session-summary.json']);key,journal=_run_identity(summary,members)
+        if (metadata.get('library_id'),metadata.get('session_id'),metadata.get('evidence_id'),metadata.get('original_journal_sha256'))!=(key,summary['session_id'],identity,journal):raise ValueError('Report identity differs from original evidence')
+        if metadata.get('started_utc')!=summary['started']:raise ValueError('Report start differs from original evidence')
+        return metadata,summary
 
     def verify(self,key):
         row=self.get(key);folder=Path(row['folder'])
-        for name,sha in row['hashes'].items():
-            if name not in ASSETS+PRESERVED or digest(folder/name)!=sha:raise ValueError('Library asset changed: '+name)
-        from .research.evidence import read_bundle
-        read_bundle(folder/ASSETS[0])
+        metadata,_=self._metadata_at(folder)
+        if metadata['hashes']!=row['hashes'] or metadata['library_id']!=row['library_id']:raise ValueError('Report index differs from immutable metadata')
         return row
 
     def _publish(self,stage,source=None,companions=None):
         from .research.evidence import read_bundle
         identity,members=read_bundle(stage/ASSETS[0]);summary=json.loads(members['session-summary.json'])
-        sid=summary['session_id'];started=datetime.fromisoformat(summary['started'])
-        if started.tzinfo is None:raise ValueError('Original UTC start needs an explicit timezone')
-        local=started.astimezone(ZoneInfo('Europe/Athens'));facts=run_facts(summary)
+        sid=summary['session_id']
         # A journal identifies a logical run; retries never create a second history row.
-        journal=summary.get('original_journal_sha256') or hashlib.sha256(members['raw-redacted.jsonl']).hexdigest()
-        key=hashlib.sha256((str(sid)+':'+journal).encode()).hexdigest()
+        key,journal=_run_identity(summary,members);local,facts,relative=_run_location(summary,key)
         with self.db() as db:old=db.execute('SELECT * FROM runs WHERE id=?',(key,)).fetchone()
         if old:
             row=self.verify(key)
             if source:
                 with self.db() as db:db.execute('INSERT OR IGNORE INTO imports VALUES(?,?,?)',(source['sha256'],key,source['path']))
-            return self.result(row)
+            self._discard_owned_scratch(stage);return self.result(row)
         error=None
         try:
             if companions:
@@ -118,12 +187,9 @@ class ReportLibrary:
             error=str(exc)
             for name in ASSETS[1:]:
                 if (stage/name).is_file():(stage/name).rename(stage/('source-'+name))
-        bucket='FailedTests' if facts['outcome']!='COMPLETED' else 'Benchmarks' if facts['kind']=='BENCHMARK' else 'Drives'
-        label='FAILED_BENCH_COM' if facts['outcome']=='FAILED_COM_OPEN' else 'BENCH_'+str(facts['rate']).replace('.0','')+'rps' if facts['kind']=='BENCHMARK' else 'DRIVE'
-        # Only derived numeric date, fixed labels and hex identities enter paths.
-        leaf=local.strftime('%Y-%m-%d_%H-%M-%S_')+label+'_'+key[:16]
-        folder=self._path((Path(bucket)/local.strftime('%Y/%m/%d')/leaf).as_posix())
-        metadata=dict(schema_version=1,library_id=key,session_id=sid,started_utc=summary['started'],ended_utc=summary.get('ended'),timezone='Europe/Athens',started_local=local.isoformat(),
+        # The date belongs in one leaf, not three repeated intermediate directories.
+        folder=self._path(relative)
+        metadata=dict(schema_version=2,library_id=key,session_id=sid,started_utc=summary['started'],ended_utc=summary.get('ended'),duration_seconds=summary.get('duration_seconds'),timezone='Europe/Athens',started_local=local.isoformat(),
             **facts,status='EXPORT_PARTIAL' if error else facts['outcome'],report_error=error,evidence_id=identity,original_journal_sha256=journal,
             ecu=json.loads(members.get('ecu-identifiers.json',b'[]')),application_versions=summary.get('application_versions',[]),
             source=source,hashes={n:digest(stage/n) for n in ASSETS+PRESERVED if (stage/n).is_file()},originals_preserved=True,cloud_upload=False)
@@ -134,7 +200,9 @@ class ReportLibrary:
         folder.parent.mkdir(parents=True,exist_ok=True)
         try:stage.rename(folder) # same-volume, fresh directory; never replace a run
         except FileExistsError:
-            self.recover_index();return self.result(self.verify(key))
+            existing,_=self._metadata_at(folder)
+            if existing['library_id']!=key:raise ValueError('Report short-ID collision; destination was not overwritten')
+            self.recover_index();self._discard_owned_scratch(stage);return self.result(self.verify(key))
         self._register(folder,metadata,source)
         return self.result(self.get(key))
 
@@ -148,9 +216,15 @@ class ReportLibrary:
     def publish_bundle(self,bundle,companions=None):
         bundle=Path(bundle).resolve();sha=digest(bundle)
         from .research.evidence import read_bundle
-        read_bundle(bundle)
+        _,members=read_bundle(bundle);key,_=_run_identity(json.loads(members['session-summary.json']),members)
         with self.db() as db:old=db.execute('SELECT run_id FROM imports WHERE source_sha=?',(sha,)).fetchone()
         if old:return self.result(self.verify(old['run_id']))
+        with self.db() as db:old=db.execute('SELECT id FROM runs WHERE id=?',(key,)).fetchone()
+        if old:
+            row=self.verify(key)
+            with self.db() as db:db.execute('INSERT OR IGNORE INTO imports VALUES(?,?,?)',(sha,key,str(bundle)))
+            if digest(bundle)!=sha:raise ValueError('Original input changed')
+            return self.result(row)
         stage=self.stage()
         with zipfile.ZipFile(bundle) as z:
             wrapped='run-export.json' in z.namelist()
@@ -182,15 +256,29 @@ class ReportLibrary:
         row.update(status=row['outcome'],report_error=None,hashes={n:digest(folder/n) for n in ASSETS+PRESERVED if (folder/n).is_file()})
         for k in ('folder','display_label'):row.pop(k,None)
         write_json(folder/'run-metadata.json',row);self._register(folder,row)
-        return self.result(self.get(key))
+        self._discard_owned_scratch(stage);return self.result(self.get(key))
 
     def recover_index(self):
         """After a rename/index interruption, register only hash-verified managed leaves."""
-        for path in self.reports.glob('*/*/*/*/*/run-metadata.json'):
-            folder=path.parent
-            if not self._path(folder.relative_to(self.reports)).is_dir():raise ValueError('Invalid recovered folder')
-            inside(self.root,path);metadata=json.loads(path.read_text(encoding='utf-8'))
-            if all(name in ASSETS+PRESERVED and digest(folder/name)==sha for name,sha in metadata['hashes'].items()):self._register(folder,metadata,metadata.get('source'))
+        candidates={}
+        for folder in self._managed_leaves(self.reports):
+            metadata,_=self._metadata_at(folder);key=metadata['library_id']
+            candidates.setdefault(key,[]).append((folder,metadata))
+        # Keep an already registered verified pointer, including an explicit rollback.
+        with self.db() as db:known={r['id']:r['path'] for r in db.execute('SELECT id,path FROM runs')}
+        for key,leaves in candidates.items():
+            current=next(((p,m) for p,m in leaves if p.relative_to(self.reports).as_posix()==known.get(key)),None)
+            folder,metadata=current or sorted(leaves,key=lambda item:(len(item[0].relative_to(self.reports).parts),str(item[0])))[0]
+            self._register(folder,metadata,metadata.get('source'),rebase=current is None)
+        return dict(recovered=len(candidates),originals_retained=True)
+
+    def _managed_leaves(self,folder):
+        folder=self._path(Path(folder).relative_to(self.reports));leaves=[]
+        for path in regular_files(folder,limit=100000):
+            if path.name!='run-metadata.json':continue
+            parts=path.parent.relative_to(self.reports).parts
+            if parts and parts[0] in BUCKETS and (len(parts)==2 or len(parts)==5 and all(p.isdigit() for p in parts[1:4])):leaves.append(path.parent)
+        return sorted(leaves)
 
     def label(self,key,label):
         self.get(key)
@@ -241,7 +329,9 @@ class ReportLibrary:
 
     def preview_migration(self,folder):
         folder=Path(folder).resolve();groups=[]
-        if folder.is_relative_to(self.reports):raise ValueError('Select legacy exports, not the managed report tree')
+        if folder.is_relative_to(self.reports):return self.preview_flatten(folder)
+        # This older import mode intentionally scans only a selected flat folder.
+        list(regular_files(folder,limit=100000))
         for bundle in sorted(folder.glob('*.zip')):
             try:
                 from .research.evidence import read_bundle
@@ -249,18 +339,138 @@ class ReportLibrary:
                 sources=[bundle]+[bundle.with_suffix(ext) for ext in ('.json','.html') if bundle.with_suffix(ext).is_file()]
                 groups.append(dict(session_id=summary['session_id'],sources=[dict(path=str(s),bytes=s.stat().st_size,sha256=digest(s)) for s in sources],action='COPY; retain all originals'))
             except (ValueError,KeyError,zipfile.BadZipFile) as exc:groups.append(dict(blocked=str(bundle),reason=str(exc),action='NO ACTION'))
-        plan=dict(schema_version=1,destination=str(self.reports),groups=groups,source_policy='COPY_ONLY; no move/delete; originals remain')
-        plan['approval_token']=hashlib.sha256(json.dumps(plan,sort_keys=True).encode()).hexdigest()
-        return plan
+        return _preview(dict(schema_version=2,operation='IMPORT_FLAT_EXPORTS',destination=str(self.reports),groups=groups,source_policy='COPY_ONLY; no move/delete; originals remain'))
 
-    def migrate(self,plan,approval_token):
-        check=dict(plan);token=check.pop('approval_token',None)
-        if token!=approval_token or token!=hashlib.sha256(json.dumps(check,sort_keys=True).encode()).hexdigest() or plan['destination']!=str(self.reports):raise ValueError('Explicit approval of this exact preview is required')
+    def migrate(self,plan,approval_token,*,cancelled=None):
+        _approved(plan,approval_token)
+        if plan['destination']!=str(self.reports):raise ValueError('Preview destination differs from this library')
+        if plan.get('operation')=='FLATTEN_REPORTS_COPY':return self._flatten(plan,cancelled=cancelled)
+        token=approval_token
         results=[];audit=self.index/('migration-'+token+'.json')
         for group in plan['groups']:
             if 'sources' not in group:continue
+            if cancelled and cancelled():raise MigrationCancelled('Migration cancelled; completed copies and all originals retained. Reapprove the same preview to resume.')
             for source in group['sources']:
                 if digest(source['path'])!=source['sha256']:raise ValueError('Migration input changed; generate a new preview')
             bundle=Path(group['sources'][0]['path']);companions={Path(s['path']).suffix:s['path'] for s in group['sources'][1:]}
             results.append(self.publish_bundle(bundle,companions));write_json(audit,dict(plan=plan,completed=results,originals_retained=True))
         return results
+
+    def preview_flatten(self,folder=None):
+        """Read-only exact deep-to-flat copy and index-rebase plan, never a purge."""
+        folder=self.reports if folder is None else Path(folder)
+        leaves=self._managed_leaves(folder);groups=[];retained=[];seen=set()
+        with self.db() as db:registered={r['id']:dict(r) for r in db.execute('SELECT * FROM runs')}
+        for source in leaves:
+            try:
+                metadata,summary=self._metadata_at(source);key=metadata['library_id']
+                if len(source.relative_to(self.reports).parts)==2:
+                    retained.append(dict(path=str(source),action='KEEP existing flat run'));continue
+                if key in seen:
+                    retained.append(dict(path=str(source),action='KEEP duplicate legacy evidence; one canonical History row'));continue
+                seen.add(key);_,_,relative=_run_location(summary,key);target=self._path(relative)
+                files=[dict(path=str(p),name=p.name,bytes=p.stat().st_size,sha256=digest(p)) for p in sorted(regular_files(source,limit=8))]
+                current=registered.get(key);before=dict(path=current['path'],metadata=json.loads(current['metadata'])) if current else None
+                canonical_files=[]
+                if target.exists():
+                    other,_=self._metadata_at(target)
+                    if other['library_id']!=key:raise ValueError('Flat destination has a different full identity; no overwrite')
+                    canonical_files=[dict(path=str(p),name=p.name,bytes=p.stat().st_size,sha256=digest(p)) for p in sorted(regular_files(target,limit=8))]
+                groups.append(dict(library_id=key,session_id=summary['session_id'],source_folder=str(source),destination_folder=str(target),sources=files,bytes=sum(f['bytes'] for f in files),
+                    destination_exists=target.exists(),canonical_files=canonical_files,copy_mode='REUSE_VERIFIED_CANONICAL' if target.exists() else 'COPY',index_before=before,
+                    action='VERIFY_EXISTING_CANONICAL then REBASE_INDEX; retain every original' if target.exists() else 'COPY_AND_VERIFY then REBASE_INDEX; retain every original',preserved_legacy_companions=[f['name'] for f in files if f['name'] in PRESERVED]))
+            except (ValueError,KeyError,OSError,zipfile.BadZipFile) as exc:groups.append(dict(blocked=str(source),reason=str(exc),action='NO ACTION'))
+        return _preview(dict(schema_version=2,operation='FLATTEN_REPORTS_COPY',preview_nonce=uuid.uuid4().hex,destination=str(self.reports),selected_root=str(folder),groups=groups,retained=retained,
+            copy_bytes=sum(g.get('bytes',0) for g in groups if not g.get('destination_exists')),source_policy='COPY_ONLY; originals, journals and databases stay in place; rollback changes index pointers only',automatic_cleanup=False))
+
+    def _audit_path(self,token):
+        if not isinstance(token,str) or len(token)!=64 or any(c not in '0123456789abcdef' for c in token):raise ValueError('Invalid migration identity')
+        return inside(self.index,self.index/('migration-'+token+'.json'))
+
+    def _check_sources(self,group):
+        source=self._path(Path(group['source_folder']).relative_to(self.reports))
+        metadata,summary=self._metadata_at(source)
+        if metadata['library_id']!=group['library_id']:raise ValueError('Migration source identity changed')
+        _,_,relative=_run_location(summary,metadata['library_id'])
+        if len(source.relative_to(self.reports).parts)!=5 or group['destination_folder']!=str(self._path(relative)):raise ValueError('Migration paths differ from verified deep-to-flat layout')
+        expected={f['name'] for f in group['sources']}
+        if {p.name for p in regular_files(source,limit=8)}!=expected:raise ValueError('Migration input changed; generate a new preview')
+        for item in group['sources']:
+            path=inside(source,source/item['name'])
+            if str(path)!=item['path'] or path.stat().st_size!=item['bytes'] or digest(path)!=item['sha256']:raise ValueError('Migration input changed; generate a new preview')
+        return metadata
+
+    def _flatten(self,plan,*,cancelled=None):
+        token=plan['approval_token'];audit_path=self._audit_path(token)
+        audit=json.loads(audit_path.read_text(encoding='utf-8')) if audit_path.exists() else dict(plan=plan,completed=[],stages={},originals_retained=True,state='COPYING')
+        if audit.get('plan')!=plan:raise ValueError('Migration checkpoint differs from approved plan')
+        if audit.get('state')=='ROLLED_BACK':raise ValueError('This migration was rolled back; create a new preview')
+        def checkpoint():write_json(audit_path,audit)
+        def check_cancel():
+            if cancelled and cancelled():
+                audit['state']='CANCELLED';checkpoint()
+                raise MigrationCancelled('Migration cancelled; originals and copied bytes retained. Reapprove this exact preview to resume.')
+        for group in plan['groups']:
+            if 'sources' not in group:continue
+            key=group['library_id'];check_cancel();metadata=self._check_sources(group)
+            target=self._path(Path(group['destination_folder']).relative_to(self.reports))
+            if group['copy_mode']=='REUSE_VERIFIED_CANONICAL' and not target.exists():raise ValueError('Approved canonical destination is missing; create a new preview')
+            if not target.exists():
+                saved=audit['stages'].get(key);stage=self._path(saved) if saved else self.stage()
+                if not saved:audit['stages'][key]=stage.relative_to(self.reports).as_posix();checkpoint()
+                if stage.parent!=self.reports/'.staging':raise ValueError('Invalid migration staging path')
+                for item in group['sources']:
+                    check_cancel();destination=inside(stage,stage/item['name'])
+                    if destination.exists():
+                        if digest(destination)!=item['sha256']:raise ValueError('Interrupted copy checksum differs; preserved for review')
+                    else:
+                        with Path(item['path']).open('rb') as src,destination.open('xb') as dst:
+                            shutil.copyfileobj(src,dst);dst.flush();os.fsync(dst.fileno())
+                    if digest(destination)!=item['sha256']:raise ValueError('Copied file failed SHA-256 verification')
+                self._check_sources(group);check_cancel();target.parent.mkdir(parents=True,exist_ok=True)
+                try:stage.rename(target)
+                except FileExistsError:pass # Concurrent destinations are checked byte-for-byte below.
+            copied,_=self._metadata_at(target)
+            expected_files=group['canonical_files'] if group['copy_mode']=='REUSE_VERIFIED_CANONICAL' else group['sources']
+            if copied['library_id']!=key or {p.name for p in regular_files(target,limit=8)}!={f['name'] for f in expected_files} or any(digest(target/f['name'])!=f['sha256'] for f in expected_files):raise ValueError('Copied destination differs; index was not rebased')
+            self._check_sources(group);check_cancel()
+            before=group['index_before'];expected=before['path'] if before else None;relative=target.relative_to(self.reports).as_posix()
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE');current=db.execute('SELECT path FROM runs WHERE id=?',(key,)).fetchone();actual=current['path'] if current else None
+                if actual not in (expected,relative):raise ValueError('Canonical index changed after preview; create a new preview')
+                db.execute('INSERT INTO runs(id,path,metadata) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET path=excluded.path,metadata=excluded.metadata',(key,relative,json.dumps(copied)))
+            if key not in audit['completed']:audit['completed'].append(key)
+            audit['state']='COPYING';checkpoint()
+        audit['state']='COMPLETED';checkpoint()
+        return [self.result(self.verify(g['library_id'])) for g in plan['groups'] if 'sources' in g]
+
+    def migrations(self):
+        result=[]
+        for path in sorted(self.index.glob('migration-*.json')):
+            inside(self.index,path);audit=json.loads(path.read_text(encoding='utf-8'));plan=audit.get('plan',{})
+            if plan.get('operation')=='FLATTEN_REPORTS_COPY':result.append(dict(token=plan['approval_token'],state=audit['state'],completed=len(audit['completed']),path=str(path)))
+        return result
+
+    def preview_migration_rollback(self,token):
+        audit=json.loads(self._audit_path(token).read_text(encoding='utf-8'));plan=audit['plan'];_approved(plan,token)
+        if plan.get('operation')!='FLATTEN_REPORTS_COPY' or audit['state']=='ROLLED_BACK':raise ValueError('No reversible copy migration')
+        groups=[]
+        for group in plan['groups']:
+            if group.get('library_id') not in audit['completed']:continue
+            metadata=self._check_sources(group);current=self.verify(group['library_id']);source=Path(group['source_folder']);target=Path(group['destination_folder'])
+            if current['folder']!=str(target):raise ValueError('Canonical pointer changed; rollback preview blocked')
+            old=group['index_before'];restore=old['path'] if old else source.relative_to(self.reports).as_posix()
+            groups.append(dict(library_id=group['library_id'],from_path=target.relative_to(self.reports).as_posix(),to_path=restore,metadata=old['metadata'] if old else metadata,action='RESTORE_INDEX_POINTER_ONLY; retain both folders'))
+        return _preview(dict(schema_version=1,operation='ROLLBACK_REPORT_INDEX',destination=str(self.reports),migration_token=token,groups=groups,files_deleted=0,files_moved=0,labels_annotations_preserved=True))
+
+    def rollback_migration(self,preview,approval_token):
+        _approved(preview,approval_token)
+        if preview!=self.preview_migration_rollback(preview['migration_token']):raise ValueError('Rollback state changed; approve a fresh preview')
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for group in preview['groups']:
+                current=db.execute('SELECT path FROM runs WHERE id=?',(group['library_id'],)).fetchone()
+                if current is None or current['path']!=group['from_path']:raise ValueError('Canonical index changed before rollback')
+                db.execute('UPDATE runs SET path=?,metadata=? WHERE id=?',(group['to_path'],json.dumps(group['metadata']),group['library_id']))
+        path=self._audit_path(preview['migration_token']);audit=json.loads(path.read_text(encoding='utf-8'));audit['state']='ROLLED_BACK';write_json(path,audit)
+        return dict(restored=len(preview['groups']),files_deleted=0,files_moved=0)
