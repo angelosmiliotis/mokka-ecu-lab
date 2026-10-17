@@ -100,3 +100,14 @@ Stop polling and Stop Recording are independent serialized operations and may be
 ## Replay and future clients
 
 Loading replay closes serial, stops recording and resets support state. Play streams one record at a time with monotonic gaps at chosen speed; Step consumes exactly one transaction. Decoders run on original bytes. Replay timestamps remain original UTC; UI arrival/rate is playback rate. No replay code obtains a serial transport. A future iOS client can share registry/journal concepts; Bluetooth/platform restrictions require separate acquisition code. No iOS functionality exists in this release.
+
+
+## v0.2.12 local organization and evidence projections
+
+`WorkspaceStorage` accepts exactly a Git checkout's immediate `release` directory. It inventories regular files without following junctions or hydrating detected cloud placeholders. A sealed preview includes file snapshots, exact destinations and protected entries. Only explicit approval permits same-volume atomic quarantine moves; per-item running/tracked/hash guards, durable checkpoints and restore recovery retain all bytes. There is no deletion API. UI file jobs are separate from the unchanged single diagnostic worker and submit no OBD requests.
+
+`ReportLibrary` places new run companions directly under a type bucket and a local timestamp/stable-identity leaf. Approved deep-folder migration copies and verifies before an atomic canonical index update; labels, imports and annotations retain identity. Interrupted operations resume their original stored plan. Index rollback preserves both source and destination files. Private recording journals and the session database are outside this maintenance operation.
+
+`CurrentLauncher` installs a separately built dispatcher, configuration and Windows shortcuts into fresh destinations after exact approval. Its receipt protects installed hashes. Dispatch verifies CURRENT and the entire selected managed build before launching disconnected; existing managed activation and startup-failure rollback behavior remains in force. The helper is embedded under the portable GUI's `_internal/launcher` directory. Developer candidates and bounded default QA outputs use LocalAppData; temporary build cleanup is restricted to an exclusively created GUID tree owned by that invocation.
+
+Offline PID evidence gates and sampling-role counts are additive projections of original recorded transactions. They do not authorize decoders, probes or transport operations. Higher-rate research is a pure virtual-time model and exported engineering proposal; no LIVE transport or setting can unlock it. The existing diagnostic policy and four-total-request limiter are unchanged.

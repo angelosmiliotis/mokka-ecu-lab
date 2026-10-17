@@ -1,5 +1,15 @@
 # Changes
 
+## 0.2.12 — Workspace, stable launcher and flat private Reports
+
+- Separate Workspace page inventories one exact release folder, protects tracked/running/private evidence, and previews every path, size and hash. Approved same-volume quarantine and restore preserve bytes, support interruption recovery and never delete files. Quarantine frees zero disk bytes.
+- Build candidates and default QA outputs stay outside the checkout/OneDrive. Three retained default candidates require explicit review; only newly owned temporary work is automatically removed.
+- Verified CURRENT dispatcher with a Windows icon, approved new Desktop/optional Start Menu shortcuts, corruption/overwrite guards and unchanged shortcut targets across activation/rollback. Starts disconnected.
+- Flat per-run Reports, four ordinary companions, canonical identity deduplication, preserved legacy backups/labels/annotations, approved copy-and-verify migration, explicit checkpoint Resume and index-only rollback.
+- Offline PID Explorer separates support, recorded framing/length/layout, numeric output, physical uncertainty and Discovery-only versus repeated polling. Throughput reports label count/window, count/send-span and interval/send-span separately.
+- Visible higher-rate research with a tested offline timing/fault model and a concrete five-request proposal. Experimental LIVE remains LOCKED; the normal read-only allowlist, one serialized worker and four-total-request ceiling are unchanged.
+- Synthetic-only public regression/screenshots, native Windows DPI inspection, packaged-process checks and source/executable parity remain publication gates. Real evidence and derived analyses stay private.
+
 ## 0.2.11 — Connected idle, private report history and managed rollback
 
 - Successful Benchmark retains a healthy synchronized connection by default, with no idle traffic; every next run refreshes recorded evidence. Explicit Disconnect, Stop, serial errors, port loss, suspension and shutdown close deterministically. COM-open failures are separate from ECU/measurement failures.

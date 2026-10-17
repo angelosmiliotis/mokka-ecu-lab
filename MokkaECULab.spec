@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
 
-datas = [('mokka_ecu_lab/sensors/standard.json', 'mokka_ecu_lab/sensors')]
+datas = [('mokka_ecu_lab/sensors/standard.json', 'mokka_ecu_lab/sensors'), ('assets/mokka-ecu-lab.svg', 'assets')]
 datas += collect_data_files('mokka_ecu_lab')
 datas += collect_data_files('tzdata') # explicit Windows IANA Europe/Athens history/DST data
 
@@ -35,6 +35,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='MokkaECULab',
+    icon='assets/mokka-ecu-lab.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
