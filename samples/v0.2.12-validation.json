@@ -1,0 +1,111 @@
+{
+  "version": "0.2.12",
+  "source": "SIMULATED / CONSTRUCTED",
+  "hardware_connected": false,
+  "private_inputs_distributed": false,
+  "new_public_fixtures_synthetic": true,
+  "regression": {
+    "passed": 759,
+    "duration_seconds": 277.77
+  },
+  "native_windows": {
+    "geometry_checks": 264,
+    "actual_qt_scales": [
+      1,
+      1.25,
+      1.5
+    ],
+    "physical_resolutions": [
+      [
+        1280,
+        720
+      ],
+      [
+        1366,
+        768
+      ],
+      [
+        1536,
+        864
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "all_passed": true
+  },
+  "packaged": {
+    "main_gui_flow_exit_codes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "installed_previous_public_smoke_exit_codes": [
+      0,
+      0
+    ],
+    "helper_exit_codes": [
+      0,
+      0,
+      0
+    ],
+    "installed_launcher_reference_gui_smoke_exit_codes": [
+      0,
+      0
+    ],
+    "temporary_windows_shortcuts_verified": 2,
+    "current_and_rollback_followed_without_shortcut_changes": true,
+    "greek_paths_and_spaces": true
+  },
+  "parity": {
+    "public_report_pairs": 18,
+    "source_executable_byte_identical": true,
+    "separate_private_replay_passed": true,
+    "all_private_outputs_outside_git": true
+  },
+  "compiled_code": {
+    "gui_project_modules": 61,
+    "dispatcher_project_modules": 24,
+    "mismatches": 0,
+    "development_only_helper_not_in_gui": true
+  },
+  "benchmark": {
+    "source": "SIMULATED",
+    "one_transport_reused": true,
+    "idle_requests": 0,
+    "explicit_disconnect_verified": true,
+    "runs": [
+      {
+        "rate": 2,
+        "requests": 114,
+        "duration_seconds": 60.10999999998603,
+        "minimum_wire_gap_ms": 500.0
+      },
+      {
+        "rate": 3,
+        "requests": 168,
+        "duration_seconds": 60.0,
+        "minimum_wire_gap_ms": 343.0
+      },
+      {
+        "rate": 4,
+        "requests": 223,
+        "duration_seconds": 60.04700000002049,
+        "minimum_wire_gap_ms": 250.0
+      }
+    ]
+  },
+  "boundaries": {
+    "normal_total_requests_per_second": 4,
+    "live_protocol_allowlist_worker_and_numeric_decoders_unchanged": true,
+    "experimental_live": "LOCKED",
+    "physical_sensor_accuracy": "UNVERIFIED",
+    "no_new_oem_uds": true
+  }
+}
