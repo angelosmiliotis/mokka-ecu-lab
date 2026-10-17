@@ -89,6 +89,9 @@ def test_queued_marker_survives_stop_canceling_an_inflight_request(tmp_path,fast
         w.submit('select',pids=[12]); w.submit('record')
         w.submit('connect',simulation=True,port='COM4',scenario='Normal idle')
         assert receiving.wait(5)
+        # Consume initialization's earlier Disconnected event before testing the
+        # later explicit disconnect acknowledgement and durable finalization.
+        wait_event(w,'connection',lambda s:s['ecu']=='Connected')
         w.submit('marker',event='Journey End'); w.submit('stop'); w.submit('disconnect')
         wait_event(w,'connection',lambda s:s['adapter']=='Disconnected')
         session=list_sessions(tmp_path)[0]; assert session['ended']

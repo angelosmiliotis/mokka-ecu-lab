@@ -213,7 +213,8 @@ def test_bundle_export_waits_for_closed_session_and_success_receipt(window,tmp_p
         window.bundle_export(latest=True)
     assert destination.exists() and window.capture_stepper.states[6]==StepState.COMPLETED
     assert window.bundle_destination==str(destination.resolve())
-    assert str(destination.resolve()) in window.capture_next_help.text()
+    assert str(destination.resolve()) in window.capture_next_help.text().replace('\u200b','')
+    assert str(destination.resolve()) in window.capture_next_help.toolTip()
     assert window.connected and not window.polling_active
 
 

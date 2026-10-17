@@ -43,7 +43,7 @@ def test_synthetic_38_declared_25_outside_legacy_not_38_observed(tmp_path):
     assert p['actual_transmitted_rate_hz']==pytest.approx(7/1.5) # endpoint count bias reported separately
     assert p['interval_rate_hz']==4 and p['latency_ms']['p50']==21
     assert report['passive'] and not report['sends_requests']
-    export_obd_report(report,tmp_path/'private.html',[path]);html=(tmp_path/'private.html').read_text()
+    export_obd_report(report,tmp_path/'private.html',[path]);html=(tmp_path/'private.html').read_text(encoding='utf-8')
     assert '<script' not in html and 'not ECU service time' in html
     assert hashlib.sha256(path.read_bytes()).digest()==digest
     with pytest.raises(ValueError):export_obd_report(report,tmp_path/'private.html',[path])

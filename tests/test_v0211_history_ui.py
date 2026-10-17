@@ -10,7 +10,7 @@ def test_history_versions_visits_filter_and_label_without_transport(window,legac
     with monkeypatch.context() as patch:
         patch.setattr(window.worker,'submit',lambda *a,**k:calls.append(a))
         for index in (8,9,10):window.sidebar.buttons[index].click();qt_app.processEvents()
-        assert calls==[] and window.tabs.count()==11
+        assert calls==[] and window.tabs.count()==13
         p.outcome.setCurrentText('FAILED_COM_OPEN');assert p.table.rowCount()==2
         p.outcome.setCurrentIndex(0);p.kind.setCurrentText('DRIVE');assert p.table.rowCount()==1
         p.kind.setCurrentIndex(0);p.rate.setCurrentText('2');assert p.table.rowCount()==1

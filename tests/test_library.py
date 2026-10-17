@@ -32,6 +32,7 @@ def test_six_groups_eighteen_companions_approved_copy_idempotent_and_wrapper(tmp
     assert all(r['timezone']=='Europe/Athens' and r['started_local'].endswith(('+03:00','+02:00')) for r in rows)
     for row in rows:
         folder=Path(row['folder']);assert folder.is_dir() and len(list(folder.iterdir()))==4
+        assert len(folder.relative_to(lib.reports).parts)==2
         assert all(lib.verify(row['library_id'])['hashes'][n]==digest(folder/n) for n in ('original-research.zip','report.json','report.html'))
     assert lib.migrate(plan,plan['approval_token'])==outputs and len(lib.rows())==6
     assert all(digest(p)==h for p,h in hashes.items())
