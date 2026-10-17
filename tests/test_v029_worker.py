@@ -23,13 +23,16 @@ def test_expanded_single_session_36_gated_sensors_no_unknown_queries(tmp_path,fa
     worker=AcquisitionWorker(tmp_path)
     try:
         assert connect(worker,'Standard expanded research')['ecu']=='18DAF110'
+        handle=worker.transport
         first=start(worker);sid=first['session_id']
         ready=wait_state(worker,lambda d:d.get('receipt',{}).get('dpf',{}).get('state')=='READY' and len(d['receipt']['observed'])==36 and all(v['positive_samples']>=2 for v in d['receipt']['observed'].values()),20)
         assert worker.capture_raw_pids=={0x7A} and EXTENSION_PIDS<=set(worker.capture_weights)
         assert all(worker.capture_weights[p]==4 for p in (0x7A,0x0B,0x10,0x0D)) and worker.capture_weights[0x0C]==3
         assert worker.submit('benchmark_start',parked_consent=True) is False
         worker.submit('session_finish');final=wait_state(worker,lambda d:d['state']=='EXPORTED')
-        assert final['session_id']==sid and final['obd_report_path'] and not worker.transport
+        assert final['session_id']==sid and final['obd_report_path'] and worker.transport is handle
+        assert final['connection_state']=='CONNECTED_IDLE' and not final['disconnected']
+        assert not worker.recorder and not worker.polling
         report=analyze_obd([final['bundle_path']]);g=report['sessions'][0]['inventory'][0]
         assert g['declared_count']==38 and g['outside_legacy_scope_count']==25
         assert g['implemented_declared_count']==36
@@ -38,6 +41,7 @@ def test_expanded_single_session_36_gated_sensors_no_unknown_queries(tmp_path,fa
         assert len(ready['receipt']['observed']['8C']['fields'])==8
         assert len(ready['receipt']['observed']['71']['fields'])==6
         assert len(ready['receipt']['observed']['8F']['fields'])==6
+        worker.submit('disconnect');until(lambda:worker.transport is None)
     finally:shutdown(worker)
 
 

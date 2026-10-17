@@ -40,7 +40,7 @@ def test_three_actions_one_journal_all_thirteen_fields_and_automatic_export(tmp_
         initial=start(worker); sid=initial['session_id']; assert sid
         # The worker also rejects directly queued manual actions, not just disabled UI.
         before=dict(worker.capture_weights)
-        for action in CONFLICTS: assert worker.submit(action) is False
+        for action in CONFLICTS-{'disconnect','stop'}: assert worker.submit(action) is False
         worker.submit('session_start',simulation=True)
         ready=wait_state(worker,lambda d: d.get('receipt') and d['receipt']['dpf']['state']=='READY' and
             all(s.get('positive_samples',0)>=2 for s in d['receipt']['observed'].values()) and len(d['receipt']['observed'])==13)
@@ -57,13 +57,14 @@ def test_three_actions_one_journal_all_thirteen_fields_and_automatic_export(tmp_
         assert len(receipt['observed']['83']['fields'])==2  # Other NOx slots absent, never fabricated zero.
         worker.submit('session_finish'); worker.submit('session_finish')
         final=wait_state(worker,lambda d:d['state']=='EXPORTED')
-        assert not worker.transport and not worker.recorder and not worker.polling
+        assert worker.transport and not worker.recorder and not worker.polling
+        assert final['connection_state']=='CONNECTED_IDLE' and not final['disconnected']
         assert final['checksums_verified'] and final['session_id']==sid
         _,members=read_bundle(final['bundle_path']); stored=json.loads(members['acquisition-receipt.json'])
         assert stored['closed_at'] and stored['dpf_proof_met_before_close']
         records=[json.loads(l) for l in members['raw-redacted.jsonl'].splitlines()]
         commands=[r['command'] for r in records if r.get('record_type')=='transaction']
-        assert commands[0]=='0100' and 'ATI' not in commands
+        assert commands[:2]==['ATDPN','0100'] and 'ATI' not in commands
         assert not any(c in commands for c in ('015C','018B','0178','0179','0173'))
         assert len(list_sessions(tmp_path))==1 and list_sessions(tmp_path)[0]['ended']
         assert len(list((tmp_path/'Reports').rglob('original-research.zip')))==1

@@ -29,7 +29,7 @@ def test_consecutive_234_reuses_handle_context_no_idle_requests_then_normal(tmp_
             state=finish(w);ids.append(state['session_id'])
             assert state['state']=='CONNECTED_IDLE' and not state['disconnected'] and not w.polling and not w.recorder
             assert w.transport.operation_deadline_ns is None and w.session.data['state']=='CONNECTED'
-            assert context is None or context==w.context_id
+            assert context is None or context!=w.context_id
             context=w.context_id;n=len(wire);time.sleep(.22);assert len(wire)==n
         assert len(handles)==1 and len(set(ids))==3 and not handles[0].closed
         # Normal Start reuses the positively confirmed adapter without reopening COM.
@@ -37,7 +37,7 @@ def test_consecutive_234_reuses_handle_context_no_idle_requests_then_normal(tmp_
         wait_event(w,'session_state',lambda d:d.get('state')=='CAPTURING')
         assert len(handles)==1
         w.submit('session_finish');wait_event(w,'session_state',lambda d:d.get('state')=='EXPORTED')
-        assert handles[0].closed and not w.transport
+        assert not handles[0].closed and w.transport is handles[0]
     finally:shutdown(w)
 
 def test_success_disconnect_option_and_explicit_disconnect(tmp_path,fast_clock):
