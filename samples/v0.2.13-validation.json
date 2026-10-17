@@ -1,0 +1,118 @@
+{
+  "version": "0.2.13",
+  "source": "CONSTRUCTED_SOFTWARE_VALIDATION",
+  "private_input_used": false,
+  "physical_vehicle_test_performed": false,
+  "tests": {
+    "passed": 902,
+    "failed": 0,
+    "seconds": 516.07
+  },
+  "native_windows": {
+    "geometry_checks": 360,
+    "actual_qt_scales": [
+      1,
+      1.25,
+      1.5
+    ],
+    "resolutions": [
+      [
+        1280,
+        720
+      ],
+      [
+        1366,
+        768
+      ],
+      [
+        1536,
+        864
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "all_inputs_synthetic": true
+  },
+  "compiled_project_modules": {
+    "gui": 63,
+    "dispatcher": 24,
+    "mismatches": 0
+  },
+  "windows_archive": {
+    "members": 834,
+    "all_crc_and_hashes_verified": true
+  },
+  "packaged_gui": {
+    "workflows": 9,
+    "exit_codes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "session_finish_cases": 3,
+    "idle_observation_seconds_at_least": 60,
+    "idle_requests": 0,
+    "same_handle_retained": true,
+    "explicit_disconnect_verified": true
+  },
+  "normal_benchmark": {
+    "rates": [
+      2,
+      3,
+      4
+    ],
+    "measurement_seconds": [
+      60.094,
+      60.016,
+      60.094
+    ],
+    "requests": [
+      115,
+      168,
+      224
+    ],
+    "minimum_wire_gaps_ms": [
+      500,
+      343,
+      250
+    ],
+    "fresh_context_each_run": true
+  },
+  "experimental_fake_com": {
+    "preflight_requests": 12,
+    "measurement_requests": 300,
+    "maximum_total": 312,
+    "preflight_minimum_gap_ms": 250,
+    "measurement_minimum_gap_ms": 200,
+    "clock": "VIRTUAL",
+    "hardware_transmissions": 0,
+    "physical_backend_present": false,
+    "hardware_state": "LOCKED",
+    "normal_maximum_req_s": 4
+  },
+  "source_executable_parity": {
+    "constructed_json_html_artifacts": 18,
+    "byte_identical": true
+  },
+  "no_private_data_distributed": true,
+  "packaged_dispatcher": {
+    "helper_process_checks": 3,
+    "windows_shortcuts": 2,
+    "greek_paths_and_spaces": true,
+    "gui_install_smoke_exit_codes": [
+      0,
+      0
+    ],
+    "current_rollback_current_verified": true,
+    "personal_sentinel_preserved": true,
+    "real_desktop_modified": false
+  }
+}
