@@ -4,10 +4,12 @@ from .capture import capture_plan
 from .protocols import LIVE_PIDS, DISCOVERY_PIDS, support_state
 from .layouts import RAW_ONLY_PIDS, raw_eligibility
 
-PRESETS = ('Comprehensive / All supported sensors', 'DPF Research Priority', 'DPF + Turbo / Critical subset')
+PRESETS = ('Comprehensive / All supported sensors', 'DPF Research Priority', 'DPF + Turbo / Critical subset', 'Correlated DPF / Turbo / SCR')
 CRITICAL_PIDS=frozenset({0x04,0x05,0x0B,0x0C,0x0D,0x10,0x11,0x23,0x2C,0x2D,0x49,0x71,0x7A})
 ALL_SENSOR_PIDS = LIVE_PIDS | DISCOVERY_PIDS
 PRIORITY = {0x7A: 4, 0x0C: 3, 0x0D: 2, 0x0B: 2, 0x10: 2, 0x05: 2}
+CORRELATED_FAST=frozenset({0x7A,0x71,0x0B,0x0C,0x10})
+CORRELATED_CONTEXT=frozenset({0x04,0x0D,0x05,0x78,0x79,0x83,0x85,0x88,0x8F})
 
 
 def affirmative_bitmap(support, pages, ecu, pid):
@@ -67,9 +69,15 @@ def auto_plan(support, pages, observations, ecu, *, prepared, consent, preset=PR
         if 0x04 in weights:weights[0x04]=2
     if preset==PRESETS[2]:
         weights={p:4 if p in {0x7A,0x71,0x0B,0x10,0x0C} else 2 if p in {0x04,0x0D} else 1 for p in weights}
+    if preset==PRESETS[3]:
+        # All already eligible PIDs remain. Recurring dynamic groups receive
+        # more of the same four-request budget; slow status/config cannot starve.
+        weights={p:4 if p in CORRELATED_FAST else 2 if p in CORRELATED_CONTEXT else 1 for p in weights}
     return dict(ecu=ecu, preset=preset, consent=bool(consent), weights=weights,
                 raw_pids=validated['raw_pids'], omitted=omitted + validated['omitted'],
-                matrix=matrix, prepared=prepared)
+                matrix=matrix, prepared=prepared,
+                scheduling_goal='CORRELATED_DPF_TURBO_SCR_ALL_ELIGIBLE' if preset==PRESETS[3] else preset,
+                cadence_tradeoff='Weighted independent timestamps, not simultaneous samples. Prioritizing dynamics lengthens slow-status intervals; no additional requests or health inference.')
 
 
 class AcquisitionReceipt:
@@ -97,7 +105,8 @@ class AcquisitionReceipt:
         self.data.update(session_id=session_id, context_id=context_id, mode=mode,
             source_kind='SIMULATED' if mode == 'SIMULATED' else 'ECU_READING', ecu=plan['ecu'],
             bitmap_evidence=deepcopy(bitmap_evidence), requested_plan=deepcopy(plan),
-            proposed_schedule={f'{p:02X}':dict(weight=w, nominal_interval_seconds=sum(plan['weights'].values()) / (w * max(.25, min(4., rate))))
+            proposed_schedule={f'{p:02X}':dict(weight=w, nominal_interval_seconds=sum(plan['weights'].values()) / (w * max(.25, min(4., rate))),
+                role='FAST_DYNAMIC' if plan.get('preset')==PRESETS[3] and p in CORRELATED_FAST else 'CORRELATION_CONTEXT' if plan.get('preset')==PRESETS[3] and p in CORRELATED_CONTEXT else 'RECURRING_STATUS_OR_LEGACY_WEIGHT')
                                 for p,w in plan['weights'].items()},
             effective_schedule={},confirmed_raw_pids=[],
             rate_limit=min(4., rate), interval_note='Estimate at selected aggregate rate; transport/disk delays may lower frequency')

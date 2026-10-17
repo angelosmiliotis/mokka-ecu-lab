@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--benchmark-smoke-test',action='store_true',help='Constructed Advanced stationary benchmark GUI validation; never hardware')
     parser.add_argument('--sequential-benchmark-smoke-test',action='store_true',help='Three actual 60-second synthetic runs over one idle connection; never hardware')
     parser.add_argument('--maintenance-smoke-test',action='store_true',help='Isolated synthetic report migration and trusted public-build rollback validation')
+    parser.add_argument('--experimental-engine-smoke-test',action='store_true',help='Memory-only fake COM five-request engine GUI validation; physical backend unavailable')
     parser.add_argument('--maintenance-reference-zips',nargs=2,type=Path,help='Two exact published Windows ZIPs used only by explicit maintenance validation')
     parser.add_argument('--dpf-bundles',nargs='+',type=Path,help='Private offline DPF RAW evolution; starts no GUI or transport')
     parser.add_argument('--dpf-output',type=Path,help='Fresh private DPF HTML / JSON report path')
@@ -29,9 +30,9 @@ def main():
     parser.add_argument('--phase-output',type=Path,help='Fresh private HTML / JSON comparison base path')
     args = parser.parse_args()
     session_validation_requested=args.session_smoke_test or args.expanded_session_smoke_test or args.critical_session_smoke_test
-    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.expanded_session_smoke_test,args.critical_session_smoke_test,args.benchmark_smoke_test,args.sequential_benchmark_smoke_test,args.maintenance_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles,args.obd_bundles))>1:
+    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.expanded_session_smoke_test,args.critical_session_smoke_test,args.benchmark_smoke_test,args.sequential_benchmark_smoke_test,args.maintenance_smoke_test,args.experimental_engine_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles,args.obd_bundles))>1:
         parser.error('Choose one validation / offline analysis mode')
-    if (args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test or args.sequential_benchmark_smoke_test or args.maintenance_smoke_test) and args.data_dir.exists():
+    if (args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test or args.sequential_benchmark_smoke_test or args.maintenance_smoke_test or args.experimental_engine_smoke_test) and args.data_dir.exists():
         parser.error('Synthetic validation requires a fresh --data-dir; existing user data is preserved')
     if bool(args.maintenance_smoke_test)!=bool(args.maintenance_reference_zips):parser.error('Explicit maintenance validation requires two public reference ZIPs; references cannot enable normal-startup maintenance')
     if args.obd_bundles:
@@ -75,7 +76,10 @@ def main():
     from mokka_ecu_lab.ui.window import MainWindow
     app = QApplication([])
     app.setApplicationName("Mokka ECU Lab")
-    window = MainWindow(args.data_dir,validation=bool(args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test or args.sequential_benchmark_smoke_test or args.maintenance_smoke_test)); window.show()
+    window = MainWindow(args.data_dir,validation=bool(args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test or args.sequential_benchmark_smoke_test or args.maintenance_smoke_test or args.experimental_engine_smoke_test)); window.show()
+    if args.experimental_engine_smoke_test:
+        from mokka_ecu_lab.ui.experimental_validation import install_experimental_validation
+        engine_timer,engine_cleanup=install_experimental_validation(window,app,args.data_dir)
     if args.maintenance_smoke_test:
         from mokka_ecu_lab.ui.maintenance_validation import install_maintenance_validation
         maintenance_timer,maintenance_cleanup=install_maintenance_validation(window,app,args.data_dir,args.maintenance_reference_zips)
@@ -132,6 +136,7 @@ def main():
     if session_validation_requested: session_cleanup()
     if args.benchmark_smoke_test or args.sequential_benchmark_smoke_test:benchmark_cleanup()
     if args.maintenance_smoke_test:maintenance_cleanup()
+    if args.experimental_engine_smoke_test:engine_cleanup()
     if args.full_auto_smoke_test:
         # The recurring validation callback retains the window in a closure.
         # Destroy its widgets while QApplication still exists, rather than
