@@ -8,14 +8,16 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer
 from mokka_ecu_lab.ui.window import MainWindow
 from mokka_ecu_lab import __version__
+from mokka_ecu_lab.development import fresh_output
 from mokka_ecu_lab.transport.simulator import SCENARIOS
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--scenario', choices=SCENARIOS, default='Normal idle')
-parser.add_argument('--output-dir', type=Path, default=root / 'samples')
+parser.add_argument('--output-dir', type=Path, default=None)
 options = parser.parse_args()
-output = options.output_dir
+output = (options.output_dir or fresh_output('ui')).resolve()
+output.mkdir(parents=True,exist_ok=False)
 app = QApplication([])
 window = MainWindow(output / 'ui-validation',validation=True)
 window.session_panel.advanced.setChecked(True)
@@ -32,7 +34,6 @@ def finish():
                   requires_reconnect=window.requires_reconnect, coverage=window.coverage.text(),
                   states=[window.dashboard.item(row, 3).text() for row in range(window.dashboard.rowCount())],
                   source_kinds=sorted({r['source_kind'] for r in window.readings.values()}))
-    output.mkdir(parents=True, exist_ok=True)
     window.grab().save(str(output / 'dashboard.png'))
     window.tabs.setCurrentIndex(2)
     window.raw_table.selectRow(max(0,window.raw_table.rowCount()-1))

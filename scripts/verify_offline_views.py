@@ -31,9 +31,17 @@ def tick():
             timer.stop()
             for width,height in ((1280,720),(1366,768),(1536,864),(1920,1080)):
                 logical=(round(width/args.scale),round(height/args.scale))
-                for widget,name in ((dpf,'dpf-hypotheses'),(phase,'phase-statistics'),(phase,'phase-utc-plot'),(obd,'ecu-inventory'),(obd,'obd-performance')):
+                for widget,name in ((dpf,'dpf-hypotheses'),(phase,'phase-statistics'),(phase,'phase-utc-plot'),(obd,'ecu-inventory'),(obd,'obd-performance'),(obd,'pid-explorer-evidence')):
                     if widget is phase: phase.tabs.setCurrentIndex(2 if name=='phase-utc-plot' else 0)
-                    if widget is obd:obd.tabs.setCurrentIndex(1 if name=='obd-performance' else 0)
+                    if widget is obd:
+                        obd.tabs.setCurrentIndex(2 if name=='pid-explorer-evidence' else 1 if name=='obd-performance' else 0)
+                        if name=='pid-explorer-evidence':
+                            raw=obd.pid_selector.findData('7A')
+                            assert raw>=0,'Synthetic bundle must include recorded 017A evidence'
+                            obd.pid_selector.setCurrentIndex(raw);obd.render_evidence()
+                            evidence=obd.evidence_view.toPlainText()
+                            for gate in ('ADVERTISED:','RECORDED POSITIVE / FRAMED:','LENGTH VERIFIED:','LAYOUT VERIFIED:','NUMERIC: 0','PHYSICAL UNVERIFIED:','Sampling coverage:'):
+                                assert gate in evidence,(gate,evidence)
                     widget.resize(*logical); app.processEvents()
                     assert abs(widget.devicePixelRatioF()-args.scale)<.02
                     assert (widget.width(),widget.height())==logical,(name,logical,widget.size())

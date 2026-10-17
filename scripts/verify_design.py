@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 from mokka_ecu_lab.ui.window import MainWindow
 from mokka_ecu_lab.research.evidence import analyze_bundles
 
@@ -39,6 +39,8 @@ def capture_pages():
             if index==4: ui.research_view.tabs.setCurrentIndex(1)
             ui.refresh_presentation(); app.processEvents()
             area=ui.tabs.widget(index); area.verticalScrollBar().setValue(0); app.processEvents()
+            if area.widget().width()>area.viewport().width()+1:
+                print(json.dumps(dict(page=name,logical=logical,overflow_widgets=[dict(kind=type(child).__name__,minimum_hint=child.minimumSizeHint().width(),minimum=child.minimumWidth(),text=getattr(child,'text',lambda:'')()) for child in area.widget().findChildren(QWidget) if child.minimumSizeHint().width()>area.viewport().width() or child.minimumWidth()>area.viewport().width()])),flush=True)
             assert area.widget().width()<=area.viewport().width()+1, (name,logical,area.widget().width(),area.viewport().width())
             ui.statusBar().showMessage('Synthetic simulation · local-only visual validation · no vehicle data')
             filename=f'{width}x{height}-{name}.png'; assert ui.grab().save(str(output/filename))

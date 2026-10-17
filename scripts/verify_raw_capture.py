@@ -15,9 +15,10 @@ from mokka_ecu_lab.ui.window import MainWindow
 from mokka_ecu_lab.logging import list_sessions
 from mokka_ecu_lab import __version__
 
+from mokka_ecu_lab.development import fresh_output
 parser=argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--output-dir',type=Path,default=Path('release/v0.2.4-validation'))
-args=parser.parse_args(); output=args.output_dir.resolve(); output.mkdir(parents=True,exist_ok=True)
+parser.add_argument('--output-dir',type=Path,default=None)
+args=parser.parse_args(); output=(args.output_dir or fresh_output('raw-capture')).resolve(); output.mkdir(parents=True,exist_ok=False)
 app=QApplication([]); window=MainWindow(output/'data',validation=True)
 window.session_panel.advanced.setChecked(True)
 window.scenario.setCurrentText('Diesel alternative layouts'); window.tabs.setCurrentIndex(6); window.show()
