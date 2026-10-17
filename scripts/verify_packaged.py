@@ -19,14 +19,14 @@ if output.exists(): parser.error('Choose a fresh validation output directory')
 output.mkdir(parents=True)
 exits=[]
 for name,flag,timeout in (('startup-1','--smoke-test',30),('startup-2','--smoke-test',30),
-                         ('full-auto','--full-auto-smoke-test',90),('session','--session-smoke-test',100),('expanded','--expanded-session-smoke-test',120),('critical','--critical-session-smoke-test',120),('benchmark','--sequential-benchmark-smoke-test',340),('maintenance','--maintenance-smoke-test',200)):
+                         ('full-auto','--full-auto-smoke-test',90),('session','--session-smoke-test',190),('expanded','--expanded-session-smoke-test',190),('critical','--critical-session-smoke-test',190),('benchmark','--sequential-benchmark-smoke-test',340),('experimental-engine','--experimental-engine-smoke-test',45),('maintenance','--maintenance-smoke-test',200)):
     command=[str(exe),flag,'--data-dir',str(output/name)]
     if name=='maintenance':command+=['--maintenance-reference-zips',*[str(p.resolve()) for p in args.maintenance_reference_zips]]
     run=subprocess.run(command,capture_output=True,timeout=timeout)
     exits.append(run.returncode)
     assert run.returncode==0,(name,'Actual Windows process exit',run.returncode,run.stderr[:400])
     sessions=list_sessions(output/name)
-    assert len(sessions)==(3 if name=='benchmark' else 0 if name=='maintenance' else 1) and all(s['ended'] for s in sessions),(name,'Unclosed recording')
+    assert len(sessions)==(3 if name=='benchmark' else 0 if name in {'maintenance','experimental-engine'} else 1) and all(s['ended'] for s in sessions),(name,'Unclosed recording')
     if name.startswith('startup'): assert sessions[0]['requests']==11 and sessions[0]['errors']==0
 receipt=json.loads((output/'full-auto/full-auto-smoke.json').read_text(encoding='utf-8'))
 assert receipt['passed'] and receipt['stored_017a_raw_frames']>=2 and receipt['monitoring_errors']==0
@@ -40,6 +40,8 @@ expanded=json.loads((output/'expanded/session-smoke.json').read_text(encoding='u
 benchmark=json.loads((output/'benchmark/benchmark-smoke.json').read_text(encoding='utf-8'))
 critical=json.loads((output/'critical/session-smoke.json').read_text(encoding='utf-8'))
 maintenance=json.loads((output/'maintenance/maintenance-smoke.json').read_text(encoding='utf-8'))
+experimental=json.loads((output/'experimental-engine/experimental-engine-smoke.json').read_text(encoding='utf-8'))
+assert experimental['passed'] and not experimental['physical_live_enabled'] and experimental['engine']['fake_com_writes']==312
 assert critical['passed'] and len(critical['scheduled_pids'])==13 and critical['adapter_disconnected'] and critical['automatic_bundle_verified']
 assert maintenance['passed'] and maintenance['zero_obd_requests'] and maintenance['actual_old_executable_smoke_exit_codes']==[0,0]
 assert [r['rate'] for r in benchmark['runs']]==[2,3,4] and benchmark['one_transport_reused'] and benchmark['idle_requests']==0 and benchmark['explicit_disconnect_verified']
@@ -49,14 +51,15 @@ assert expanded['adapter_disconnected'] and expanded['automatic_bundle_verified'
 assert standard['passed'] and standard['primary_actions']==['Connect','Start Session','Finish Session']
 assert len(standard['scheduled_pids'])==13 and standard['stored_017a_raw_frames']>=2
 assert standard['adapter_disconnected'] and standard['automatic_bundle_verified'] and standard['monitoring_errors']==0
+assert all(s['connected_idle_after_finish'] and s['same_transport_retained'] and s['idle_requests']==0 and s['idle_observed_seconds']>=60 and s['explicit_disconnect_verified'] for s in (standard,expanded,critical))
 _,members=__import__('mokka_ecu_lab.research.evidence',fromlist=['read_bundle']).read_bundle(standard['bundle_path'])
 assert json.loads(members['acquisition-receipt.json'])['dpf_proof_met_before_close']
-result=dict(actual_process_exits=exits,stationary_benchmark=benchmark,critical_scheduled_pids=13,maintenance=maintenance,expanded_scheduled_pids=36,expanded_stored_017a_raw_frames=expanded['stored_017a_raw_frames'],source='SIMULATED',private_input_used=False,
+result=dict(actual_process_exits=exits,stationary_benchmark=benchmark,experimental_fake_com=experimental,critical_scheduled_pids=13,maintenance=maintenance,expanded_scheduled_pids=36,expanded_stored_017a_raw_frames=expanded['stored_017a_raw_frames'],source='SIMULATED',private_input_used=False,
     hardware_connected=False,startup_transactions=11,startup_errors=0,
     automatic_scheduled_pids=21,stored_017a_raw_frames=receipt['stored_017a_raw_frames'],
     monitoring_errors=0,closed_recording=True,worker_receipt_checksums_verified=True,
     standard_primary_actions=standard['primary_actions'],standard_scheduled_pids=13,
     standard_stored_017a_raw_frames=standard['stored_017a_raw_frames'],standard_automatic_bundle_verified=True,
-    standard_disconnected_after_export=True)
+    standard_connected_idle_after_export=True,standard_explicit_disconnect_verified=True,session_idle_observed_seconds=standard['idle_observed_seconds'])
 (output/'packaged-validation.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
 print(json.dumps(result))
