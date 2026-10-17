@@ -181,11 +181,11 @@ class MainWindow(QMainWindow):
         return b
 
     def send(self, action, **kwargs):
-        if hasattr(self,'session_panel') and action in CONFLICTS-{'session_connect','rate','bench_auto_start','bench_auto_stop'} and not self.session_panel.advanced.isChecked():
+        if hasattr(self,'session_panel') and action in CONFLICTS-{'session_connect','rate','bench_auto_start','bench_auto_stop','disconnect','stop'} and not self.session_panel.advanced.isChecked():
             self.notice('Manual acquisition is available only in Advanced / Developer. Use Connect → Start Session → Finish Session.'); return
-        if hasattr(self,'session_panel') and (self.session_panel.snapshot.get('active') or 'session_start' in self.pending_actions) and action in CONFLICTS:
+        if hasattr(self,'session_panel') and (self.session_panel.snapshot.get('active') or 'session_start' in self.pending_actions) and action in CONFLICTS-{'disconnect','stop'}:
             self.notice('Automatic session owns acquisition; Finish Session first'); return
-        if action in {'discover','monitor_discovery','drive_capture','full_auto','retry_auto'}:
+        if action in {'discover','monitor_discovery','drive_capture','full_auto','retry_auto','session_connect','session_start','bench_auto_start'}:
             self.user_paused = False
         if action == 'discover': self.polling_active = False
         if action in {"stop", "disconnect", "replay", "shutdown", "connect"}:
@@ -1369,7 +1369,7 @@ class MainWindow(QMainWindow):
                 if value.get('state')=='EXPORTED' or value.get('report_status')=='EXPORT_PARTIAL':self.history_panel.refresh()
             elif kind=='session_rejected':
                 self.notice(value)
-                for action in ('session_start','session_finish','session_export_retry'): self.pending_actions.pop(action,None)
+                for action in ('session_connect','session_start','session_finish','session_export_retry'): self.pending_actions.pop(action,None)
             elif kind == 'auto_reset':
                 if value.get('context_id')==self.context_id: self.auto_receipt={}; self._auto_signature=None
             elif kind == 'auto_rejected':
@@ -1649,6 +1649,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.higher_rate_panel.stop_model()
+        self.higher_rate_panel.stop_fake()
         if any(panel.jobs.busy() for panel in (self.history_panel,self.versions_panel,self.workspace_panel)):
             self.notice('Waiting for the bounded offline copy/verification to finish; original files are preserved.');event.ignore();return
         self.timer.stop()

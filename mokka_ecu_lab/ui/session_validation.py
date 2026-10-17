@@ -16,7 +16,7 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
     if critical:window.session_panel.profile.setCurrentIndex(1)
     window.session_panel.advanced.setChecked(False); window.tabs.setCurrentIndex(7)
     app.setQuitOnLastWindowClosed(False)
-    stage='connect'; began=time.monotonic(); last=began; gaps=[]; wire=[]; sid=None; states=[]
+    stage='connect'; began=time.monotonic(); last=began; gaps=[]; wire=[]; sid=None; states=[];handle=None;idle_started=None;idle_count=None
     original=Simulator._exchange
     def traced(self,command,stop,timeout):
         wire.append(dict(command=command,monotonic_ns=self.last_wire_ns))
@@ -32,16 +32,17 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
     observe('session-disconnected')
     window.session_panel.connect.click()
     def tick():
-        nonlocal stage,last,sid
+        nonlocal stage,last,sid,handle,idle_started,idle_count
         now=time.monotonic(); gaps.append(now-last); last=now; window.drain()
         try:
             d=window.session_panel.snapshot; state=d.get('state'); r=d.get('receipt') or {}
             if state and (not states or states[-1]!=state): states.append(state)
-            if now-began>80: raise AssertionError('Three-action validation deadline: '+str(d))
+            if now-began>170: raise AssertionError('Three-action plus sixty-second idle validation deadline: '+str(d))
             if state=='FAILED': raise AssertionError(d.get('reason')+' '+str(d.get('export_error')))
             if stage=='connect' and state=='CONNECTED':
                 assert not window.recording_id and not list_sessions(root) and not window.polling_active
                 assert d['source_kind']=='SIMULATED' and d['ecu']==expected_ecu
+                handle=window.worker.transport
                 observe('session-connected'); window.session_panel.start.click(); stage='capture'
             elif stage=='capture':
                 if d.get('session_id'):
@@ -50,20 +51,21 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
                 if r.get('dpf',{}).get('state')=='READY' and len(r.get('observed',{}))==expected_count and all(
                         v.get('positive_samples',0)>=minimum_samples for v in r['observed'].values()):
                     assert len(r['effective_schedule'])==expected_count and r['confirmed_raw_pids']==['7A']
-                    assert r['effective_schedule']['7A']['weight']==4 and r['effective_schedule']['0C']['weight']==(4 if critical else 3)
+                    assert r['effective_schedule']['7A']['weight']==4 and r['effective_schedule']['0C']['weight']==4
                     assert all(b['recorded'] for b in r['bitmap_evidence'].values())
                     assert not r['pre_connect_initialization_recorded'] and window.recording_id==sid
                     observe('session-ready')
                     result['capture_receipt']=r; window.session_panel.finish.click(); stage='export'
             elif stage=='export' and state=='EXPORTED':
-                assert not d['adapter_open'] and not d['recording_active'] and not window.worker.transport
+                assert d['adapter_open'] and not d['recording_active'] and window.worker.transport is handle
+                assert d['connection_state']=='CONNECTED_IDLE' and not window.worker.polling
                 assert d['session_id']==sid and d['checksums_verified']
                 _,members=read_bundle(d['bundle_path']); saved=json.loads(members['acquisition-receipt.json'])
                 assert saved['closed_at'] and saved['dpf_proof_met_before_close']
                 session=list_sessions(root); assert len(session)==1 and session[0]['ended']
                 journal=root/session[0]['raw_path']; assert hashlib.sha256(journal.read_bytes()).hexdigest()==d['original_journal_sha256']
                 tx=[json.loads(l) for l in members['raw-redacted.jsonl'].splitlines() if json.loads(l).get('record_type')=='transaction']
-                assert tx[0]['command']=='0100' and not any(t['command']=='ATI' for t in tx)
+                assert [t['command'] for t in tx[:2]]==['ATDPN','0100'] and not any(t['command']=='ATI' for t in tx)
                 assert len(list((root/'Reports').rglob('original-research.zip')))==1
                 assert all(b['monotonic_ns']-a['monotonic_ns']>=250000000 for a,b in zip(wire,wire[1:]))
                 assert not any(w['command'].startswith('22') for w in wire)
@@ -72,7 +74,7 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
                 result.update(passed=True,version=__version__,source='SIMULATED',private_input_used=False,hardware_connected=False,
                     critical_profile=critical,profile=window.session_panel.profile.currentData(),
                     primary_actions=['Connect','Start Session','Finish Session'],session_id=sid,bundle_path=d['bundle_path'],
-                    one_session=True,closed_recording=True,adapter_disconnected=True,automatic_bundle_verified=True,
+                    one_session=True,closed_recording=True,connected_idle_after_finish=True,automatic_bundle_verified=True,
                     scheduled_pids=list(result['capture_receipt']['effective_schedule']),
                     stored_017a_raw_frames=saved['dpf']['recorded_positive_six_byte_frames'],
                     observed_samples={p:s['positive_samples'] for p,s in result['capture_receipt']['observed'].items()},
@@ -81,10 +83,20 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
                     monitoring_errors=window.capture_monitor_errors,maximum_gui_tick_gap_seconds=max(gaps),
                     original_journal_unchanged=True,full_acquisition_receipt=True)
                 assert max(gaps)<1.5,('UI responsiveness',max(gaps))
+                idle_started=time.monotonic();idle_count=len(wire);stage='idle-proof'
+            elif stage=='idle-proof':
+                assert window.worker.transport is handle and len(wire)==idle_count and not window.worker.recorder
+                assert handle.operation_deadline_ns is None and not window.worker.polling
+                if now-idle_started>=60:
+                    result.update(idle_requests=0,idle_observed_seconds=now-idle_started,same_transport_retained=True)
+                    window.session_panel.disconnect.click();stage='disconnect'
+            elif stage=='disconnect' and not window.worker.transport and not window.adapter_open:
+                result.update(adapter_disconnected=True,explicit_disconnect_verified=True)
                 output.write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
-                timer.stop(); window.close(); app.exit(0); stage='done'
+                timer.stop();window.close();app.exit(0);stage='done'
         except Exception as exc:
-            output.write_text(json.dumps(dict(passed=False,error=str(exc),stage=stage),indent=2),encoding='utf-8')
+            import traceback
+            output.write_text(json.dumps(dict(passed=False,error=str(exc),error_type=type(exc).__name__,traceback=traceback.format_exc(),stage=stage),indent=2),encoding='utf-8')
             timer.stop(); window.close(); app.exit(1)
     timer.timeout.connect(tick); timer.start(50)
     def cleanup():

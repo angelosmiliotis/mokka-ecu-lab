@@ -7,7 +7,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QWidget,QVBoxLayout,QLabel,QGroupBox,QTableWidget,QTableWidgetItem,QCheckBox,QTextEdit,QHeaderView,QAbstractItemView,QComboBox
 from .components import FlowLayout,caption,page_heading
 from .theme import style_table
-from mokka_ecu_lab.auto_capture import ALL_SENSOR_PIDS
+from mokka_ecu_lab.auto_capture import ALL_SENSOR_PIDS,PRESETS
 from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
 from mokka_ecu_lab.protocols import support_state
 
@@ -22,10 +22,12 @@ class SessionPanel(QWidget):
         self.connect=window.button('Connect',self.connect_action,'primary')
         self.start=window.button('Start Session',self.start_action,'primary')
         self.finish=window.button('Finish Session',lambda:window.send('session_finish'),'stop')
-        for button in (self.connect,self.start,self.finish): button.setMinimumHeight(44); row.addWidget(button)
+        self.disconnect=window.button('Disconnect',lambda:window.send('disconnect'))
+        for button in (self.connect,self.start,self.finish,self.disconnect): button.setMinimumHeight(44); row.addWidget(button)
         layout.addLayout(row)
-        self.profile=QComboBox();self.profile.addItem('Comprehensive · all eligible sensors','DPF Research Priority');self.profile.addItem('DPF + Turbo · critical subset only','DPF + Turbo / Critical subset');self.profile.setAccessibleName('Optional pre-drive sampling profile');layout.addWidget(self.profile)
-        layout.addWidget(caption('Default includes every eligible PID. Optional critical subset improves cadence within the same 4 req/s budget; no fast turbo-response claim. Select while parked.'))
+        self.profile=QComboBox();self.profile.addItem('Comprehensive · correlated DPF / turbo / SCR',PRESETS[3]);self.profile.addItem('DPF + Turbo · critical subset only',PRESETS[2]);self.profile.addItem('Comprehensive · legacy DPF priority',PRESETS[1]);self.profile.setAccessibleName('Optional pre-drive sampling profile');layout.addWidget(self.profile)
+        layout.addWidget(caption('Default retains all eligible PIDs: fast DPF/turbo, recurring NOx/SCR context and slower status. Independent timestamps; prioritization lengthens slow intervals. Critical subset is optional; all profiles remain ≤4 req/s.'))
+        layout.addWidget(caption('Finish saves the recording and keeps a healthy connection idle with no polling. Disconnect closes it. Port loss, unsafe responses, suspend and shutdown require safe closure; the next explicit start performs fresh verification.'))
         layout.addWidget(caption('Start Session authorizes the fixed READ-ONLY research profile: all eligible standard sensors, eligible RAW-only 017A/0188, DPF Priority, ≤4 total req/s. No individual selection or additional consent step.'))
         self.state=QLabel(); self.state.setWordWrap(True); layout.addWidget(self.state)
         self.metrics=QLabel(); self.metrics.setWordWrap(True); layout.addWidget(self.metrics)
@@ -78,8 +80,16 @@ class SessionPanel(QWidget):
 
     def acknowledge(self,data):
         self.snapshot=data
-        for action in ('session_connect','session_start','session_finish','session_export_retry'): self.window.pending_actions.pop(action,None)
-        if data['state']=='CONNECTED':
+        acknowledgements={
+            'session_connect':{'CONNECTED','DISCONNECTED','FAILED','EXPORTED'},
+            'session_start':{'RECORDING_SETUP','DISCOVERING','CONFIGURED','WAITING_RAW','READY','CAPTURING','PARTIAL','FAILED','EXPORTED'},
+            'session_finish':{'FINALIZING','EXPORTED','FAILED','DISCONNECTED'},
+            'session_export_retry':{'FINALIZING','EXPORTED','FAILED'},
+        }
+        for action,states in acknowledgements.items():
+            if action=='session_finish' and data['state']=='FAILED' and data.get('active'):continue
+            if data['state'] in states:self.window.pending_actions.pop(action,None)
+        if data['state']=='CONNECTED' or data.get('connection_state')=='CONNECTED_IDLE':
             self.window.settings.setValue('session_last_source',0 if data['mode']=='SIMULATED' else 1)
             if data['mode'].startswith('LIVE'): self.window.settings.setValue('session_outgoing_port',data['port'])
         if data.get('bundle_path'):
@@ -94,9 +104,11 @@ class SessionPanel(QWidget):
     def update(self,*_):
         w=self.window; d=self.snapshot; state=d.get('state','DISCONNECTED'); active=d.get('active',False)
         pending=any(a.startswith('session_') for a in w.pending_actions)
-        self.connect.setEnabled(not active and not pending and state not in {'CONNECTED','CONNECTING','FINALIZING'} and not w.recording_id)
-        self.start.setEnabled(state=='CONNECTED' and not active and not pending and not w.requires_reconnect and not w.recording_id and not w.capture_active)
+        idle_connected=bool(d.get('adapter_open') and not w.requires_reconnect and not active)
+        self.connect.setEnabled(not active and not pending and not idle_connected and not d.get('isolated_handle') and state not in {'CONNECTED','CONNECTING','FINALIZING'} and not w.recording_id)
+        self.start.setEnabled((state=='CONNECTED' or state=='EXPORTED' and idle_connected or (getattr(w,'connection_detail',None) or {}).get('stage')=='CONNECTED_IDLE' and w.adapter_open) and not active and not pending and not w.requires_reconnect and not w.recording_id and not w.capture_active)
         self.finish.setEnabled(active and not pending and state!='FINALIZING')
+        self.disconnect.setEnabled(bool(w.adapter_open or d.get('adapter_open') or d.get('isolated_handle') or active) and state!='FINALIZING' and 'disconnect' not in w.pending_actions)
         self.advanced.setEnabled(not active and not pending)
         developer=self.advanced.isChecked() and not active and not pending
         self.profile.setEnabled(not active and not pending and not getattr(w,'benchmark_state',{}).get('active'))
@@ -122,9 +134,13 @@ class SessionPanel(QWidget):
         source_label=('EXPORTED RECORDING: '+('LIVE · hardware unverified' if recorded_mode.startswith('LIVE') else 'SIMULATION — synthetic data' if recorded_mode=='SIMULATED' else 'UNKNOWN recorded source')) if recorded_mode else ('SIMULATION — synthetic data' if w.source.currentIndex()==0 else 'LIVE · hardware unverified')
         ecu_display=', '.join(d.get('recorded_ecus',[])) if recorded_mode else d.get('ecu')
         self.identity.setText(source_label+
-            f'   ·   Port {"CLOSED" if recorded_mode else d.get("port") or w.port.currentText()}   ·   ECU {ecu_display or "not confirmed"}')
-        self.state.setText(state+' · '+d.get('reason','Connect explicitly; no recording is open')+
+            f'   ·   Port {"CLOSED" if recorded_mode and not d.get("adapter_open") else d.get("port") or w.port.currentText()}   ·   ECU {ecu_display or "not confirmed"}')
+        self.state.setText(state+(' · CONNECTED IDLE' if state=='EXPORTED' and idle_connected else '')+' · '+d.get('reason','Connect explicitly; no recording is open')+
             (' · awaiting worker acknowledgment' if pending else '')+(('\n'+d['export_error']) if d.get('export_error') else ''))
+        if 'session_finish' in w.pending_actions:
+            self.state.setText('FINISH REQUESTED · completing the current bounded reply, then saving. No next polling request. Await worker confirmation.')
+        if d.get('isolated_handle'):
+            self.state.setText(self.state.text()+'\nRECONNECT REQUIRED · driver closure is unconfirmed; no further requests. Use Disconnect to retry cleanup before connecting.')
         r=d.get('receipt') or {}; schedule=r.get('effective_schedule',{}); observed=r.get('observed',{})
         elapsed=d.get('duration_seconds',0.)
         if active and d.get('started_at'): elapsed=(datetime.now(timezone.utc)-datetime.fromisoformat(d['started_at'])).total_seconds()

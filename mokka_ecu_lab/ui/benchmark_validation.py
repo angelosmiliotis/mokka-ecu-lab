@@ -56,7 +56,8 @@ def install_benchmark_validation(ui,app,root,*,scale=None,output=None,sequential
                     assert perf['transmitted_requests']==state['requests'] and perf['wire_send_gap_ms']['minimum']>=1000/rate-1e-6
                     assert bench['preflight_sent_requests']>0 and set(bench['pids'])=={'010B','010C','010D','0110'}
                     assert len(list_sessions(root))==run_index+1
-                    handles.append((id(ui.worker.transport),ui.worker.context_id));assert len(set(handles))==1
+                    handles.append((id(ui.worker.transport),ui.worker.context_id))
+                    assert len({h[0] for h in handles})==1 and len({h[1] for h in handles})==len(handles)
                     runs.append(dict(session_id=state['session_id'],rate=rate,requests=state['requests'],duration_seconds=state['measurement_duration_seconds'],bundle_path=state['bundle_path'],minimum_wire_gap_ms=perf['wire_send_gap_ms']['minimum'],connected_idle=True))
                     screenshots('benchmark-finished' if not sequential else f'benchmark-{rate}-finished')
                     idle_since=time.monotonic();idle_wire_count=len(wire);stage='idle-proof'
@@ -70,7 +71,7 @@ def install_benchmark_validation(ui,app,root,*,scale=None,output=None,sequential
                     result.update(passed=True,source='SIMULATED',private_input_used=False,hardware_connected=False,requests=first['requests'],fixed_rate=2,
                         duration_seconds=first['duration_seconds'],preflight_separate=True,old_48_send_early_stop_absent=True,bundle_path=first['bundle_path'],runs=runs,
                         minimum_recorded_wire_gap_ms=first['minimum_wire_gap_ms'],all_wire_gaps_at_least_250ms=all(b['ns']-a['ns']>=250000000 for a,b in zip(wire,wire[1:])),
-                        automatic_bundle_verified=True,connected_idle_after_success=True,idle_requests=0,one_transport_reused=True,explicit_disconnect_verified=True,disconnected=True,native_geometry=geometry,maximum_gui_tick_gap_seconds=max(gaps))
+                        automatic_bundle_verified=True,connected_idle_after_success=True,idle_requests=0,one_transport_reused=True,fresh_context_each_explicit_run=True,explicit_disconnect_verified=True,disconnected=True,native_geometry=geometry,maximum_gui_tick_gap_seconds=max(gaps))
                     result['requests']=first['requests']
                     assert result['all_wire_gaps_at_least_250ms'];target.write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8');ui.close();app.exit(0)
         except Exception as exc:failure.append(str(exc));target.write_text(json.dumps(dict(passed=False,error=failure,stage=stage)),encoding='utf-8');timer.stop();ui.close();app.exit(1)

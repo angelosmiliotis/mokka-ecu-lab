@@ -53,7 +53,7 @@ class BenchmarkPanel(QWidget):
         self.identity.setText(source)
         conflict=bool(w.session_panel.snapshot.get('active') or w.recording_id or w.polling_active or w.mode.startswith('REPLAY')) if hasattr(w,'session_panel') else False
         self.start.setEnabled(not active and not conflict);self.rate.setEnabled(not active);self.stop.setEnabled(active)
-        self.keep.setEnabled(not active);self.disconnect.setEnabled(active or w.adapter_open)
+        self.keep.setEnabled(not active);self.disconnect.setEnabled(active or w.adapter_open or getattr(w,'session_panel',None) and w.session_panel.snapshot.get('isolated_handle',False))
         if self.rejection and not active:self.state.setText('BLOCKED · '+self.rejection)
         elif not active and conflict:self.state.setText('BLOCKED · Finish the existing recording/session/polling or leave replay before Start BENCH.')
         else:self.state.setText(('PREPARING · waiting for worker' if self.pending else s.get('state','IDLE'))+' · '+s.get('reason','Choose rate; click starts automatic preparation.'))
