@@ -74,6 +74,12 @@ class BenchmarkWorkflow:
         if self.transport and not options.get('simulation') and (options.get('port')!=self.port or options.get('baud',115200)!=getattr(self.transport,'baud',115200)):raise ValueError('Selected port/baud differs from idle handle; Disconnect explicitly first')
         if self.transport and not all(self.transport.idle_status().get(k) for k in ('open','prompt_synchronized')):
             self.disconnect();raise ValueError('Idle handle or prompt synchronization is invalid; explicitly reconnect')
+        reserved_ecu=None
+        if self.transport:
+            reserved_ecu=self.discovery_target or self.session.data.get('ecu')
+            if reserved_ecu is None and len(self.support)==1:reserved_ecu=next(iter(self.support))
+            if reserved_ecu not in self.support or reserved_ecu=='headerless':
+                self.disconnect();raise ValueError('Idle connection has no confirmed reserved ECU; reconnect explicitly')
         if not options.get('simulation') and not options.get('port','').strip():raise ValueError('Select an outgoing LIVE COM port')
         self.benchmark=AutoBenchmark(rate,time.monotonic(),'SIMULATED' if options.get('simulation') else 'LIVE · hardware unverified')
         self.benchmark.keep_connected=options.get('keep_connected',True) is True
@@ -88,12 +94,17 @@ class BenchmarkWorkflow:
             if not reuse:self.initialize(options)
             self.set_polling(False,'Benchmark owns one serialized acquisition path')
             if not self.can_protocol:raise ValueError('Benchmark requires identified CAN ECU')
+            if reuse:
+                self.fresh_acquisition_context()
+                self.verify_retained_protocol()
             self.benchmark.mode=self.mode;self.benchmark.context_id=self.context_id
             if reuse:self.bench_emit('REUSING_IDLE_CONNECTION','Refresh current bitmap and positive evidence on selected idle connection')
             self.support={};self.support_pages={};self.bitmap_evidence={};self.bitmap_conflicts=set();self.range_configuration={};self.positive_wire_evidence={};self.discovery_observations={}
             record=self.transaction('0100');self.bench_check(record);self.ingest_bitmap(record,0)
             if len(self.support)!=1 or 'headerless' in self.support:raise ValueError('Exactly one identified positive ECU required; no automatic responder choice')
             ecu=next(iter(self.support));self.discovery_target=ecu;self.benchmark.ecu=ecu
+            if reuse and ecu!=reserved_ecu:raise ValueError('ECU_MISMATCH: fresh response differs from retained confirmed ECU; reconnect explicitly')
+            if reuse:self.confirm_current_connection()
             self.bench_emit('ECU_CONFIRMED','One reserved response address; exact calibration remains unverified')
             self.bench_emit('DISCOVERY','Bounded known bitmap/configuration discovery; no full sensor scan')
             self.transport.rate=float(rate);self.transport.discovery_enabled=True

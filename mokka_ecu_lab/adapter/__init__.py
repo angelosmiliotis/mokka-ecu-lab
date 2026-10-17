@@ -25,6 +25,21 @@ from mokka_ecu_lab.auto_capture import auto_plan, AcquisitionReceipt, PRESETS, a
 from mokka_ecu_lab import __version__
 from mokka_ecu_lab.session import SessionCoordinator, CONFLICTS, export_closed_session, recover_interrupted_session
 
+
+class _FinishAwareStop:
+    """Finish cancels an unsent wait; only explicit Stop can cancel a wire receive."""
+    def __init__(self,worker,transport):self.worker=worker;self.transport=transport
+    def is_set(self):
+        return self.worker.stop_io.is_set() or (self.worker.session.finish_requested and self.transport.last_wire_ns is None)
+    def wait(self,seconds):
+        deadline=time.monotonic()+max(0,seconds)
+        while not self.is_set():
+            remaining=deadline-time.monotonic()
+            if remaining<=0:return False
+            self.worker.stop_io.wait(min(.02,remaining))
+        return True
+
+
 class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
     def __init__(self, root: Path):
         super().__init__(name="serialized-obd-worker", daemon=False)
@@ -34,6 +49,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.stop_io = threading.Event()
         self.quit_event = threading.Event()
         self.transport = self.recorder = self.replay = None
+        self.unclosed_transport=None  # Quarantined resource: never eligible for writes/reuse.
         self.benchmark=None
         self.connection_state={'stage':'DISCONNECTED','reason':'No open handle; OS pairing state unknown'}
         self.idle_health_checked=time.monotonic()
@@ -94,7 +110,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
     def submit(self, action, **kwargs):
         if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown','disconnect','system_suspend'}:
             self.emit('notice','Stationary benchmark owns acquisition; stop it first');return False
-        if self.session.active and action in CONFLICTS:
+        if self.session.active and action in CONFLICTS and action not in {'disconnect','stop'}:
             self.emit('session_rejected', 'Automatic session owns acquisition; Finish Session first')
             return False
         if action in {'session_finish','shutdown'}: self.session.finish_requested=True
@@ -110,7 +126,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         if action in {"connect", "start", "discover", "monitor_discovery", "drive_capture", "full_auto", "retry_auto", "session_connect", "session_start", "benchmark_start"}:
             # Clear only at user submission, so a later Stop cancels queued Connect too.
             self.stop_io.clear()
-        if action in {"disconnect", "stop", "shutdown", "replay", "session_finish",'system_suspend'}:
+        if action in {"disconnect", "stop", "shutdown", "replay",'system_suspend'}:
             self.stop_io.set()
         try: self.commands.put_nowait((action, kwargs))
         except queue.Full:
@@ -120,6 +136,10 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         return True
 
     def transaction(self, command,timeout=6.):
+        # Finish stops the next send, rather than interrupting an already bounded
+        # receive. A fully returned response is journaled before finalization.
+        if self.session.active and self.session.finish_requested:
+            raise Cancelled('Session Finish requested before next send')
         sent_ns, stamp = time.monotonic_ns(), utc_now()
         raw, error, status, readings, parsed, rejections = b"", "", "OK", [], [], []
         protocol_errors, discovery_samples = [], []
@@ -128,7 +148,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                 deadline=self.benchmark.preflight_deadline if self.benchmark.started is None else self.benchmark.started+60
                 self.transport.operation_deadline_ns=int(deadline*1e9)
                 if time.monotonic()>=deadline:raise Cancelled('Benchmark phase monotonic deadline')
-            raw = self.transport.exchange(command, self.stop_io,timeout=timeout)
+            stop=_FinishAwareStop(self,self.transport) if self.session.active else self.stop_io
+            raw = self.transport.exchange(command, stop,timeout=timeout)
             if command.startswith("01"):
                 pid = int(command[2:], 16)
                 result = parse_reply(raw, pid, command)
@@ -176,6 +197,10 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         except ValueError as exc:
             error, status = str(exc), "INVALID"
         wire_ns = self.transport.last_wire_ns
+        if status=='CANCELLED' and wire_ns is None and self.session.active and self.session.finish_requested:
+            raise Cancelled('Session Finish canceled an unsent request; no ECU transaction occurred')
+        if status=='TRANSPORT_ERROR' or status=='CANCELLED' and wire_ns is not None:
+            self.requires_reconnect=True
         if wire_ns is not None:
             self.last_application_send_ns=wire_ns
             stamp = datetime.fromtimestamp(time.time() - (time.monotonic_ns() - wire_ns) / 1e9, timezone.utc).isoformat(timespec='microseconds')
@@ -479,10 +504,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             if options.get('session_recording'):
                 # Reacquire the entire chain inside this journal; old connection samples
                 # must never masquerade as recorded session Discovery evidence.
-                self.support={}; self.support_pages={}; self.bitmap_evidence={}; self.bitmap_conflicts=set()
-                self.discovery_observations={}
-                self.range_configuration={}
-                self.positive_wire_evidence={}
+                self.fresh_acquisition_context()
+                self.verify_retained_protocol()
                 self.ingest_bitmap(self.transaction('0100'),0)
                 if target not in self.support: raise ValueError('Current recorded bitmap does not confirm the connected ECU')
             self.discover(target)
@@ -490,6 +513,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                 raise ValueError('Discovery did not complete; no automatic retry')
             if any(e==target for e,base in self.bitmap_conflicts):
                 raise ValueError('Conflicting raw bitmap evidence for current ECU; Full Auto aborted without sensor probing')
+            if options.get('session_recording'):
+                self.confirm_current_connection()
             # Known basic measurements also need one strict positive sample.
             for pid in sorted(LIVE_PIDS & self.support[target]):
                 if not affirmative_bitmap(self.support,self.support_pages,target,pid): continue
@@ -611,6 +636,42 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         if isinstance(self.benchmark,AutoBenchmark):self.benchmark.connection_stages.append(dict(self.connection_state))
         self.emit('connection_status',dict(self.connection_state))
 
+    def healthy_idle_transport(self):
+        """Passive handle/prompt check only; physical availability is rechecked on Start."""
+        if not self.transport or self.requires_reconnect:return False
+        try:return all(self.transport.idle_status().get(k) for k in ('open','prompt_synchronized'))
+        except Exception:return False
+
+    def fresh_acquisition_context(self):
+        """Keep the handle and its global send clock, discard every old evidence gate."""
+        self.context_id=uuid.uuid4().hex
+        self.support={};self.support_pages={};self.bitmap_evidence={};self.bitmap_conflicts=set()
+        self.discovery_observations={};self.range_configuration={};self.positive_wire_evidence={}
+        self.discovery_prepared=self.discovery_completed=self.discovery_active=False
+        self.capture_mode=False;self.capture_weights={};self.capture_raw_pids=set()
+        self.discovery_target=None;self.auto_deadline=None;self.failures=0
+        self.scheduler=PollScheduler();self.pacing=AdaptivePacing(self.rate)
+        self.transport.rate=self.rate
+        self.transport.supported=set();self.transport.discovery_supported=set()
+        self.transport.discovery_enabled=False;self.transport.operation_deadline_ns=None
+        self.emit('context',dict(id=self.context_id,mode=self.mode))
+        self.emit('support',{});self.emit('support_pages',{})
+
+    def verify_retained_protocol(self):
+        """Fresh adapter protocol evidence belongs to this run, never an old bitmap."""
+        record=self.transaction('ATDPN')
+        number=record['raw_text'].replace('>','').strip().upper()
+        if record['status']!='OK' or not self.healthy_idle_transport() or number not in {'6','7','8','9','A6','A7','A8','A9'} or number!=self.protocol_number:
+            self.requires_reconnect=True
+            raise TransportError('Current adapter protocol differs from confirmed connection; reconnect explicitly')
+
+    def confirm_current_connection(self):
+        """A fresh UI context becomes connected only after positive current evidence."""
+        if not self.healthy_idle_transport() or not self.support:
+            raise TransportError('Fresh ECU connection evidence is not safe to confirm')
+        self.emit('connection',dict(adapter=self.adapter,ecu='Connected',protocol=self.protocol,mode=self.mode))
+        self.connection_stage('ECU_VERIFIED','Current run positively confirmed ECU; physical calibration remains unverified')
+
     def check_idle_connection(self):
         """OS status only, no query, keepalive, reset or hidden reconnect."""
         if not self.transport:return
@@ -626,6 +687,9 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
 
     def close_recording(self):
         if self.recorder:
+            if self.session.active:
+                self.session.data.update(session_id=self.recorder.id,recorded_transactions=self.recorder.count,
+                    transaction_errors=self.recorder.errors,journal_path=str(self.recorder.path.resolve()))
             with self.marker_lock: tokens=list(self.pending_markers)
             for token in tokens: self.persist_marker({'marker_id':token})
             self.save_capture_evidence()
@@ -651,21 +715,38 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.discovery_active = False
         self.discovery_prepared = False
         if self.transport: self.transport.discovery_enabled = False
-        self.set_polling(False, "Disconnected")
-        if self.transport: self.transport.close()
+        self.set_polling(False, "Disconnected", self.requires_reconnect)
+        transport=self.transport or self.unclosed_transport
         self.transport = None
+        close_error=None
+        if transport:
+            try:
+                transport.close();self.unclosed_transport=None
+            except Exception as exc:
+                self.unclosed_transport=transport;self.requires_reconnect=True;close_error=str(exc)
+                self.emit('notice','Handle close could not be confirmed; transport isolated, no more requests. Retry Disconnect or restart the application. '+close_error)
         if finish_recording: self.close_recording()
-        self.connection_stage('DISCONNECTED','Handle closed; no automatic reconnect')
-        if self.session.data['state']=='CONNECTED' and not self.session.active:
-            self.session.transition('DISCONNECTED','Adapter explicitly closed',adapter_open=False);self.publish_session(True)
-        self.emit("connection", {"adapter": "Disconnected", "ecu": "Unavailable", "protocol": self.protocol, "mode": self.mode})
+        self.connection_stage('RECONNECT_REQUIRED' if close_error else 'DISCONNECTED',
+            'Handle close unconfirmed; resource isolated from acquisition. '+close_error if close_error else 'Handle closed; no automatic reconnect')
+        if self.session.data['state'] in {'CONNECTED','EXPORTED'} and not self.session.active:
+            self.session.transition('DISCONNECTED','Usable adapter disconnected; handle cleanup unconfirmed' if close_error else 'Adapter explicitly closed',adapter_open=False,
+                connection_state='RECONNECT_REQUIRED' if close_error else 'DISCONNECTED',disconnected=True)
+        if not self.session.active:
+            self.session.data.update(connection_state='RECONNECT_REQUIRED' if close_error else 'DISCONNECTED',disconnected=True)
+            self.publish_session(True)
+        self.emit("connection", {"adapter": "Disconnected", "ecu": "Unavailable", "protocol": self.protocol, "mode": self.mode,
+            "handle_close_confirmed":not bool(self.unclosed_transport),"isolated_handle":bool(self.unclosed_transport)})
 
     def initialize(self, options):
+        if self.unclosed_transport:
+            raise TransportError('Previous handle close is unconfirmed; retry explicit Disconnect or restart before opening another COM handle')
         # An empty pre-connect recorder is allowed; captured sources never share a session.
         if self.recorder and self.recorder.count:
             self.close_recording()
             self.emit("notice", "Previous session closed before reconnect/source change. Start Recording for the new session.")
         self.disconnect(finish_recording=False)
+        if self.unclosed_transport:
+            raise TransportError('Previous handle could not close; transport isolated, no replacement COM handle opened')
         if self.replay: self.replay.close(); self.replay = None
         self.replay_playing = False
         self.support = {}
@@ -721,6 +802,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.transport.supported = set().union(*self.support.values()) if self.support else set()
         self.protocol = self.transaction("ATDP")["raw_text"].replace('>', '').strip()
         number = self.transaction("ATDPN")['raw_text'].replace('>','').strip().upper()
+        self.protocol_number=number
         self.can_protocol = number in {'6','7','8','9','A6','A7','A8','A9'}
         self.emit("support", self.support)
         self.emit("support_pages", self.support_pages)
@@ -800,6 +882,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         data=self.session.snapshot()
         data.update(context_id=self.context_id,mode=self.mode,port=self.port,rate_limit=self.rate,
             recording_active=bool(self.recorder),adapter_open=bool(self.transport),
+            handle_close_confirmed=not bool(self.unclosed_transport),isolated_handle=bool(self.unclosed_transport),
             polling_active=self.polling,requires_reconnect=self.requires_reconnect,
             receipt=self.auto_receipt.snapshot() if self.auto_receipt and self.auto_receipt.data.get('session_id')==data.get('session_id') else data.get('exported_acquisition_receipt'))
         if self.recorder:
@@ -816,11 +899,17 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.publish_session(True)
 
     def connect_session(self,options):
+        if self.unclosed_transport:
+            self.emit('session_rejected','Previous handle close is unconfirmed; retry Disconnect or restart before connecting')
+            self.publish_session(True);return
         if self.session.active or self.recorder or self.replay:
             self.emit('session_rejected','Finish recording / leave replay before standard Connect'); return
-        if self.session.data['state']=='CONNECTED' and self.transport and not self.requires_reconnect:
-            if bool(options.get('simulation'))!=(self.mode=='SIMULATED') or not options.get('simulation') and options.get('port')!=self.port:
-                self.emit('session_rejected','Source/port differs from retained connection; Disconnect explicitly first');return
+        if self.session.data['state'] in {'CONNECTED','EXPORTED'} and self.transport and not self.requires_reconnect:
+            if bool(options.get('simulation'))!=(self.mode=='SIMULATED') or not options.get('simulation') and (options.get('port')!=self.port or options.get('baud',115200)!=getattr(self.transport,'baud',115200)):
+                self.emit('session_rejected','Source/port/baud differs from retained connection; Disconnect explicitly first');return
+            if not self.healthy_idle_transport():
+                self.disconnect();self.set_polling(False,'Idle handle/prompt invalid; reconnect explicitly',True)
+                self.connection_stage('RECONNECT_REQUIRED','Passive handle/prompt check failed');return
             self.publish_session(True); return
         self.session_stage('CONNECTING','Opening the explicitly configured source; awaiting positive ECU identity',active=False)
         try:
@@ -848,15 +937,22 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
     def start_session(self,options):
         if self.session.active:
             self.publish_session(True); return
-        if self.session.data['state']!='CONNECTED' or not self.transport or self.requires_reconnect or self.recorder or self.replay:
+        if self.session.data['state'] not in {'CONNECTED','EXPORTED'} or not self.transport or self.requires_reconnect or self.recorder or self.replay:
             self.emit('session_rejected','Connect and confirm the ECU first; no automatic reconnect or overlapping recording'); return
         if bool(options.get('simulation'))!=(self.mode=='SIMULATED'):
             self.emit('session_rejected','Selected source differs from the confirmed connection'); return
-        self.session.begin(); self.publish_session(True)
+        if not options.get('simulation') and ('port' in options and options['port']!=self.port or 'baud' in options and options['baud']!=getattr(self.transport,'baud',115200)):
+            self.emit('session_rejected','Selected port/baud differs from retained handle; Disconnect explicitly first');return
+        if not self.healthy_idle_transport():
+            self.disconnect();self.set_polling(False,'Idle handle/prompt invalid; reconnect explicitly',True)
+            self.connection_stage('RECONNECT_REQUIRED','Passive handle/prompt check failed before Session');return
+        self.session.begin()
+        self.session.data.update(connection_state='ACQUIRING',disconnected=False,export_outcome=None)
+        self.publish_session(True)
         self.session_internal=True
         try:
             profile=options.get('profile',PRESETS[1])
-            if profile not in {PRESETS[1],PRESETS[2]}:raise ValueError('Unknown normal session profile')
+            if profile not in set(PRESETS[1:]):raise ValueError('Unknown normal session profile')
             self.session.data.update(profile=profile,sampling_scope='EXPLICIT_CRITICAL_SUBSET' if profile==PRESETS[2] else 'ALL_ELIGIBLE')
             self.full_auto(dict(options,reuse=True,consent=True,preset=profile,
                 ecu=self.session.data['ecu'],session_recording=True))
@@ -866,6 +962,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         except Exception as exc:
             self.session_stage('PARTIAL' if isinstance(exc,Cancelled) else 'FAILED',str(exc)+'; Finish Session preserves and exports available evidence')
             if not isinstance(exc,Cancelled): self.set_polling(False,str(exc),requires_reconnect=True)
+            if isinstance(exc,TransportError) and not isinstance(exc,Cancelled) or self.requires_reconnect:
+                self.disconnect()
         finally: self.session_internal=False
 
     def persist_closed_coordinator(self):
@@ -881,29 +979,47 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                 db.execute('UPDATE sessions SET metadata=? WHERE id=?',(json.dumps(data),session_id)); db.commit()
         finally: db.close()
 
-    def finish_standard_session(self):
+    def finish_standard_session(self, keep_connected=True):
         if not self.session.active: self.publish_session(True); return
         session_id=self.recorder.id if self.recorder else self.session.data.get('session_id')
-        self.session_stage('FINALIZING','Stopping acquisition, closing original journal, then verifying the automatic private bundle')
-        if self.recorder:
-            self.session.data.update(recorded_transactions=self.recorder.count,transaction_errors=self.recorder.errors,
-                journal_path=str(self.recorder.path.resolve()))
-        self.session.data['duration_seconds']=(datetime.now(timezone.utc)-datetime.fromisoformat(self.session.data['started_at'])).total_seconds()
-        self.set_polling(False,'Session finalization',self.requires_reconnect)
-        self.capture_mode=False; self.discovery_active=False
-        if self.transport: self.transport.discovery_enabled=False
-        self.emit_capture('Finalizing standard session')
         try:
+            self.session_stage('FINALIZING','Stopping acquisition, closing original journal, then verifying the automatic private bundle')
+            if self.recorder:
+                self.session.data.update(recorded_transactions=self.recorder.count,transaction_errors=self.recorder.errors,
+                    journal_path=str(self.recorder.path.resolve()))
+            self.session.data['duration_seconds']=(datetime.now(timezone.utc)-datetime.fromisoformat(self.session.data['started_at'])).total_seconds()
+            self.set_polling(False,'Session finalization',self.requires_reconnect)
+            self.capture_mode=False; self.discovery_active=False
+            self.auto_deadline=None
+            if self.transport:
+                self.transport.discovery_enabled=False
+                self.transport.operation_deadline_ns=None
+            self.emit_capture('Finalizing standard session')
             self.close_recording()
             if not session_id: raise ValueError('No session journal was created')
             self.session.data.update(session_id=session_id,journal_closed=True)
             result=export_closed_session(self.root,session_id)
-            self.disconnect(finish_recording=False)
-            self.session_stage('EXPORTED','Private bundle verified; journal closed and adapter disconnected',active=False,export_error=None,**result)
+            keep=keep_connected and self.healthy_idle_transport() and not self.stop_io.is_set() and not self.quit_event.is_set()
+            if keep:
+                self.idle_health_checked=time.monotonic()
+                self.connection_stage('CONNECTED_IDLE','Verified session exported; retained handle, zero idle requests; physical availability rechecked on next Start')
+            else:
+                self.disconnect(finish_recording=False)
+                if self.requires_reconnect:self.connection_stage('RECONNECT_REQUIRED','Handle/prompt untrusted; explicit reconnect required')
+            self.session_stage('EXPORTED','EXPORTED · CONNECTED IDLE; zero idle queries. Start a new Session/Benchmark or Disconnect explicitly.' if keep else 'Private bundle verified; adapter closed because closure was requested or transport was not safe to retain',
+                active=False,export_error=None,retry_export=False,connection_state='CONNECTED_IDLE' if keep else 'RECONNECT_REQUIRED' if self.requires_reconnect else 'DISCONNECTED',
+                disconnected=not keep,export_outcome='VERIFIED',**result)
         except Exception as exc:
+            # An incomplete close remains an immutable offline-recovery input;
+            # never retry a disk operation by starting live acquisition again.
+            if self.recorder:
+                for handle in (self.recorder.file,self.recorder.db):
+                    try:handle.close()
+                    except Exception:pass
+                self.recorder=None;self.emit('recording',None)
             self.disconnect(finish_recording=False)
             self.session_stage('FAILED','Export/finalization failed; original journal preserved. Use explicit offline export retry.',
-                active=bool(self.recorder),session_id=session_id,export_error=str(exc),retry_export=not bool(self.recorder),**getattr(exc,'result',{}))
+                active=False,session_id=session_id,export_error=str(exc),retry_export=bool(session_id),connection_state='RECONNECT_REQUIRED' if self.unclosed_transport else 'DISCONNECTED',disconnected=True,export_outcome='FAILED',**getattr(exc,'result',{}))
         self.persist_closed_coordinator()
 
     def retry_session_export(self,options):
@@ -915,7 +1031,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         try:
             recover_interrupted_session(self.root,session_id)
             result=export_closed_session(self.root,session_id)
-            self.session_stage('EXPORTED','Offline bundle verified; original journal preserved',active=False,export_error=None,retry_export=False,**result)
+            self.session_stage('EXPORTED','Offline bundle verified; original journal preserved',active=False,export_error=None,retry_export=False,
+                journal_closed=True,connection_state='RECONNECT_REQUIRED' if self.unclosed_transport else 'DISCONNECTED',disconnected=True,export_outcome='VERIFIED',**result)
         except Exception as exc:
             self.session_stage('FAILED','Offline export failed; original journal preserved',active=False,export_error=str(exc),retry_export=True)
         self.persist_closed_coordinator()
@@ -923,7 +1040,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
     def handle(self, action, options):
         if self.benchmark and self.benchmark.active and action not in {'benchmark_stop','bench_auto_stop','shutdown','disconnect','system_suspend'}:
             self.emit('notice','Stationary benchmark owns acquisition; stop it first');return
-        if self.session.active and action in CONFLICTS and not self.session_internal:
+        if self.session.active and action in CONFLICTS and action not in {'disconnect','stop'} and not self.session_internal:
             self.emit('session_rejected','Automatic session owns acquisition; Finish Session first'); return
         if action=='bench_auto_start':
             try:self.begin_auto_benchmark(options)
@@ -998,9 +1115,11 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             self.emit_discovery(True,'Monitoring supported standard PIDs; vehicle unverified')
         elif action in {'disconnect','system_suspend'}:
             if self.benchmark:self.finish_benchmark('Explicit Disconnect' if action=='disconnect' else 'Windows suspension; explicit reconnect required')
-            if self.session.active:self.finish_standard_session()
+            if self.session.active:self.finish_standard_session(keep_connected=False)
             self.disconnect()
         elif action == "stop":
+            if self.session.active:
+                self.finish_standard_session(keep_connected=False);self.disconnect();return
             if self.auto_receipt: self.auto_stage('STOPPED','Stopped by user; no automatic retry')
             self.capture_mode = False
             self.emit_capture('Stopped; cached values are historical')
@@ -1072,7 +1191,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             else: self.emit("notice", "Replay complete. " + '; '.join(self.replay.warnings))
         elif action == "shutdown":
             if self.benchmark:self.finish_benchmark('Application shutdown; no automatic restart')
-            if self.session.active: self.finish_standard_session()
+            if self.session.active: self.finish_standard_session(keep_connected=False)
             self.quit_event.set()
 
     def persist_marker(self, options):
@@ -1097,7 +1216,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                     self.handle(action, options)
                 except queue.Empty: pass
                 except Cancelled:
-                    self.set_polling(False, "Connection canceled")
+                    self.set_polling(False, "Connection canceled", self.requires_reconnect)
                     if self.session.active and self.session.finish_requested: self.finish_standard_session()
                     elif self.transport and self.transport.last_wire_ns is not None:
                         self.disconnect(); self.emit("notice", "Receive canceled after send; reconnect to restore prompt synchronization")
@@ -1172,6 +1291,6 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                     except Exception as exc:
                         self.replay_playing = False; self.emit("notice", str(exc))
         finally:
-            if self.session.active: self.finish_standard_session()
+            if self.session.active: self.finish_standard_session(keep_connected=False)
             self.disconnect()
             if self.replay: self.replay.close()
