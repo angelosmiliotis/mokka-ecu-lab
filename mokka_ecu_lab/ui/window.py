@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, Q
     QHeaderView, QAbstractItemView, QListWidget, QListWidgetItem, QSplitter, QTextEdit,
     QFileDialog, QMessageBox, QCheckBox, QLineEdit, QSpinBox, QGroupBox, QFrame, QGridLayout, QApplication, QSizePolicy)
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QScatterSeries
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QIcon
 from mokka_ecu_lab.adapter import AcquisitionWorker
 from mokka_ecu_lab.sensors import load_registry, convert
 from mokka_ecu_lab.transport import discover_ports
@@ -120,7 +120,7 @@ class MainWindow(QMainWindow):
         else: self.settings = QSettings("MokkaECULab", "Desktop")
         self.setWindowTitle(f"Mokka ECU Lab {__version__} · read-only diagnostics")
         self.resize(1366, 768); self.setMinimumSize(760, 480)
-        self.setWindowIcon(icon('research', 48)); self.setStyleSheet(STYLE)
+        self.setWindowIcon(QIcon(str(Path(__file__).resolve().parents[2]/'assets/mokka-ecu-lab.svg'))); self.setStyleSheet(STYLE)
         self.signal_values = {}; self._chart_signature = None
         central = QWidget(); self.setCentralWidget(central)
         shell = QVBoxLayout(central); shell.setContentsMargins(0, 0, 0, 0); shell.setSpacing(0)
@@ -151,6 +151,10 @@ class MainWindow(QMainWindow):
         from .versions import VersionsPanel
         self.history_panel=HistoryPanel(self);self.tabs.addTab(self.history_panel,'History / Reports')
         self.versions_panel=VersionsPanel(self);self.tabs.addTab(self.versions_panel,'App Versions')
+        from .higher_rate import HigherRatePanel
+        from .workspace import WorkspacePanel
+        self.higher_rate_panel=HigherRatePanel();self.tabs.addTab(self.higher_rate_panel,'Higher-rate research')
+        self.workspace_panel=WorkspacePanel(self);self.tabs.addTab(self.workspace_panel,'Workspace / Storage')
         self.ensurePolished()
         for widget in self.findChildren(QWidget): widget.ensurePolished()
         # Keep the established seven page indices/API, with scrollable content.
@@ -1644,7 +1648,8 @@ class MainWindow(QMainWindow):
         style_chart(self.signal_chart)
 
     def closeEvent(self, event):
-        if self.history_panel.jobs.busy() or self.versions_panel.jobs.busy():
+        self.higher_rate_panel.stop_model()
+        if any(panel.jobs.busy() for panel in (self.history_panel,self.versions_panel,self.workspace_panel)):
             self.notice('Waiting for the bounded offline copy/verification to finish; original files are preserved.');event.ignore();return
         self.timer.stop()
         self.settings.setValue("sensor_order", [self.sensor_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.sensor_list.count())])
@@ -1653,6 +1658,6 @@ class MainWindow(QMainWindow):
         if self.worker.is_alive():
             self.timer.start(100); self.notice("Waiting for recording flush. Close again when finished."); event.ignore()
         else:
-            self.history_panel.jobs.close();self.versions_panel.jobs.close()
+            self.history_panel.jobs.close();self.versions_panel.jobs.close();self.workspace_panel.jobs.close()
             QApplication.instance().removeNativeEventFilter(self.power_filter)
             event.accept()

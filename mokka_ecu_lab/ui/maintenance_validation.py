@@ -10,6 +10,7 @@ from mokka_ecu_lab.logging.bundle import export_research_bundle
 from mokka_ecu_lab.analysis.obd import analyze_obd,export_obd_report
 from mokka_ecu_lab.research.evidence import read_bundle
 from mokka_ecu_lab.versions import ManagedVersions,release_info
+from mokka_ecu_lab.launcher import CurrentLauncher
 
 def prepare_constructed_maintenance(root,references):
     root=Path(root);legacy=root/'constructed-legacy';legacy.mkdir();journal_root=root/'constructed-journals';hashes={}
@@ -51,6 +52,7 @@ def install_maintenance_validation(ui,app,root,references,*,observer=None):
     def accept_prepared(value):
         nonlocal prepared,state
         prepared=value;ui.history_panel.loaded(value['library_rows']);ui.versions_panel.manager=value['manager']
+        ui.versions_panel.launcher=CurrentLauncher(value['manager'],value['manager'].root.parent/(value['manager'].root.name+'-launcher'))
         report=value['inventory'];ui.versions_panel.last_inventory=report;ui.versions_panel.build.clear()
         for b in report['builds']:ui.versions_panel.build.addItem(b['key']+' · '+b['role'],b['key'])
         ui.versions_panel.identity.setText('SYNTHETIC managed-copy validation · CURRENT '+str(report['state']['current'])+' · ROLLBACK '+str(report['state']['previous']))
