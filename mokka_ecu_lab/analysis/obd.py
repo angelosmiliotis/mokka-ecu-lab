@@ -80,7 +80,8 @@ def inventory(records,identity):
             if response.header is None:continue
             key=(response.header,)+source_key(r)
             if key not in groups and len(groups)>=128:raise ValueError('Too many ECU/source inventory groups')
-            g=groups.setdefault(key,dict(bitmap=BitmapEvidence(),ledger=[],positive=Counter(),decoded=Counter(),lengths=defaultdict(Counter),ranges={}))
+            g=groups.setdefault(key,dict(bitmap=BitmapEvidence(),ledger=[],positive=Counter(),decoded=Counter(),lengths=defaultdict(Counter),ranges={},
+                length_verified=Counter(),layout_verified=Counter(),numeric_verified=Counter(),roles=defaultdict(Counter),refs=defaultdict(lambda:defaultdict(list))))
             if response.negative_code is not None:continue
             if parsed.errors:continue
             if pid in BITMAP_PIDS:
@@ -91,6 +92,16 @@ def inventory(records,identity):
             else:
                 g['positive'][pid]+=1
                 g['lengths'][pid][len(response.data)]+=1
+                role=('ADAPTIVE_POLLING' if r.get('pacing_mode')=='ADAPTIVE' else 'BENCHMARK_MEASUREMENT' if r.get('benchmark_phase')=='MEASUREMENT'
+                    else 'RECORDED_DISCOVERY' if r.get('discovery_samples') else 'FIXED_PREPARATION' if r.get('pacing_mode')=='FIXED_POLICY' else 'UNCLASSIFIED_RECORDED')
+                g['roles'][pid][role]+=1
+                ref=dict(evidence_id=identity,transaction_id=r.get('id'),timestamp=r.get('timestamp'),origin='RECORDED_ORIGINAL_RESPONSE')
+                def remember(stage):
+                    if len(g['refs'][pid][stage])<3:g['refs'][pid][stage].append(ref)
+                remember('framed')
+                definition=definitions.get(pid);expected=definition.length if definition else UNIMPLEMENTED_STANDARD.get(pid,{}).get('length')
+                exact=expected is not None and len(response.data)==expected
+                if exact:g['length_verified'][pid]+=1;remember('length_verified')
                 try:
                     if pid in STANDARD_DIESEL:
                         valid=any(f['state']=='AVAILABLE' for f in STANDARD_DIESEL[pid].decode(response.data))
@@ -100,6 +111,9 @@ def inventory(records,identity):
                         basic_range(registry[pid],response.data,g['ranges'],advertised);valid=True
                     else:valid=False
                     g['decoded'][pid]+=valid
+                    if definition is not None:
+                        if exact:g['layout_verified'][pid]+=1;remember('layout_verified')
+                        if exact and valid:g['numeric_verified'][pid]+=1;remember('numeric')
                 except ValueError:pass
     output=[]
     for key,g in sorted(groups.items()):
@@ -118,10 +132,23 @@ def inventory(records,identity):
             else:facts.append('DEFINITION UNVERIFIED')
             if count:facts.append('RESPONSE OBSERVED')
             if count and not g['decoded'][pid]:facts.append('RAW ONLY / LAYOUT UNVERIFIED')
+            expected=definition.length if definition else UNIMPLEMENTED_STANDARD.get(pid,{}).get('length')
+            base=((pid-1)//32)*32
+            bitmap_refs=[dict(evidence_id=identity,transaction_id=e['transaction_id'],timestamp=e['timestamp'],request=e['request'],state=e['state']) for e in g['ledger'] if e['request']==f'01{base:02X}'][:3]
+            progression=dict(advertised=dict(state=support,evidence=bitmap_refs),
+                recorded_positive=dict(samples=count,evidence=g['refs'][pid]['framed']),
+                framed=dict(samples=count,evidence=g['refs'][pid]['framed']),
+                length_verified=dict(expected_data_bytes=expected,samples=g['length_verified'][pid],evidence=g['refs'][pid]['length_verified']),
+                layout_verified=dict(samples=g['layout_verified'][pid],evidence=g['refs'][pid]['layout_verified'],basis='Existing exact definition, flags and reserved/encoding rules; no new layout inferred'),
+                numeric=dict(samples=g['numeric_verified'][pid],evidence=g['refs'][pid]['numeric'],basis='Offline exact-layout replay; field availability and current range configuration apply'),
+                sampling=dict(role_counts=dict(g['roles'][pid]),pattern='REPEATED_ADAPTIVE_POLLING' if g['roles'][pid]['ADAPTIVE_POLLING']>1 else 'SINGLE_ADAPTIVE_POLLING_REPLY' if g['roles'][pid]['ADAPTIVE_POLLING'] else 'REPEATED_BENCHMARK_SUBSET' if g['roles'][pid]['BENCHMARK_MEASUREMENT']>1 else 'NO_RECORDED_ONGOING_POLLING_PROOF',
+                    interpretation='Discovery/preparation-only values do not establish continuous monitoring or stable behavior. Repeated polling is recorded coverage, not uninterrupted physical sensing.'),
+                physical=dict(state='UNVERIFIED',basis='No independent vehicle calibration supplied by software decoding'),
+                evidence_limit='At most three original references per gate; samples count the full selected recording. Gates are separate facts, not health ratings.')
             rows.append(dict(pid=f'{pid:02X}',request=f'01{pid:02X}',name=name,advertised_support=support,
                 decoder_implemented=implemented,live_allowlisted=pid in LIVE_PIDS|DISCOVERY_PIDS,legacy_scope=pid in LEGACY_PIDS,
                 response_observed=count,valid_numeric_responses=g['decoded'][pid],positive_payload_lengths=dict(g['lengths'][pid]),facts=facts,
-                confidence='Independent vehicle accuracy UNVERIFIED',priority='CURRENT DOCUMENTED MEASUREMENT' if implemented else 'OFFLINE RESEARCH ONLY',
+                confidence='Independent vehicle accuracy UNVERIFIED',evidence_progression=progression,priority='CURRENT DOCUMENTED MEASUREMENT' if implemented else 'OFFLINE RESEARCH ONLY',
                 reason=UNIMPLEMENTED_STANDARD.get(pid,{}).get('reason','A support bit is not a valid positive reply; current same-ECU gates apply')))
         output.append(dict(evidence_id=identity,ecu=key[0],mode=key[1],source_kind=key[2],context_id=key[3],
             declared_measurement_status_ids=[f'{p:02X}' for p in declared],declared_count=len(declared),
@@ -162,6 +189,9 @@ def performance(records,identity):
         output.append(dict(evidence_id=identity,mode=key[0],source_kind=key[1],context_id=key[2],
             transmitted_requests=len(sent),send_span_seconds=duration,actual_transmitted_rate_hz=len(sent)/duration if duration else None,
             interval_rate_hz=(len(sent)-1)/duration if duration else None,rate_denominator='First to last send; count/span and interval/span are both reported',
+            throughput_definitions=dict(actual_transmitted_rate_hz='COUNT_OVER_SEND_SPAN: N transmitted requests / (last send - first send); endpoint count convention',
+                interval_rate_hz='INTERVALS_OVER_SEND_SPAN: (N - 1) intervals / (last send - first send); unavailable without a positive send span',
+                sustained_window_rate='COUNT_OVER_MEASUREMENT_WINDOW: N measurement sends / full measured window; separate benchmark field, not send-span throughput'),
             wire_send_gap_ms=distribution(gaps),hard_four_hz_spacing_violations=sum(g<250-1e-6 for g in gaps),latency_ms=distribution(lat),categories=dict(categories),
             rolling_gap_jitter_ms=distribution(rolling),rolling_window_gaps=32,rolling_stride_gaps=8,explicit_retry_records=sum(r.get('retry') is True for r,_ in pairs),
             retries_note='Only explicit retry metadata counted; repeated ordinary polling is not inferred to be retry',
@@ -181,7 +211,12 @@ def analyze_obd(paths):
         seen.add(identity);records=strict_records(members)
         from .benchmark import benchmark_summary
         from .quality import field_quality
-        sessions.append(dict(evidence_id=identity,checksum_verified=True,inventory=inventory(records,identity),performance=performance(records,identity),benchmark=benchmark_summary(records,members,identity),field_quality=field_quality(members,records)))
+        benchmark=benchmark_summary(records,members,identity)
+        if benchmark:
+            benchmark['throughput_definitions']=dict(actual_sustained_rate='COUNT_OVER_MEASUREMENT_WINDOW: measurement sent_requests / measurement_duration_seconds; preflight excluded',
+                actual_transmitted_rate_hz='COUNT_OVER_SEND_SPAN: each performance source group N / (last send - first send)',
+                interval_rate_hz='INTERVALS_OVER_SEND_SPAN: each performance source group (N - 1) / (last send - first send)')
+        sessions.append(dict(evidence_id=identity,checksum_verified=True,inventory=inventory(records,identity),performance=performance(records,identity),benchmark=benchmark,field_quality=field_quality(members,records)))
     histories=defaultdict(list);comparisons=[]
     for s in sessions:
         for g in s['inventory']:histories[(g['ecu'],g['mode'],g['source_kind'])].append(g)
@@ -209,7 +244,7 @@ def export_obd_report(report,path,inputs=()):
     if report.get('inventory_comparisons'):blocks.append('<h2>Address/source inventory comparisons · no joined trace</h2><pre>'+escape(json.dumps(report['inventory_comparisons'],indent=2))+'</pre>')
     for session in report['sessions']:
         if session.get('benchmark'):
-            b=session['benchmark'];blocks.append('<h2>Fixed 60-second benchmark</h2><p>'+escape(f"Run {b['run_id']} | {b['mode']} | ECU {b['ecu']} | requested {b['requested_rate']} req/s | actual {b['actual_sustained_rate']} req/s | measured {b['measurement_duration_seconds']} s | sent {b['sent_requests']} | completed {b['completed']}")+'</p><p>'+escape(b['interpretation'])+'</p><details><summary>Preflight, phase and outcome provenance</summary><pre>'+escape(json.dumps(b,indent=2))+'</pre></details>')
+            b=session['benchmark'];blocks.append('<h2>Fixed 60-second benchmark</h2><p>'+escape(f"Run {b['run_id']} | {b['mode']} | ECU {b['ecu']} | requested {b['requested_rate']} req/s | sustained N/full measured window {b['actual_sustained_rate']} req/s | measured {b['measurement_duration_seconds']} s | sent {b['sent_requests']} | completed {b['completed']}")+'</p><p>'+escape(b['interpretation'])+'</p><details><summary>Preflight, phase and outcome provenance</summary><pre>'+escape(json.dumps(b,indent=2))+'</pre></details>')
         for g in session['inventory']:
             blocks.append('<h2>'+escape(g['ecu']+' / '+g['mode']+' / '+g['source_kind'])+'</h2><p>'+escape(f"Declared {g['declared_count']} non-bitmap identifiers; {g['outside_legacy_scope_count']} outside legacy scope. Bitmap coverage {g['bitmap_coverage']}. Support is not observation. "+g['inventory_scope_note'])+'</p>')
             blocks.append('<table><tr><th>Request</th><th>Definition</th><th>Support</th><th>Observed</th><th>Facts / provenance</th></tr>')
@@ -217,12 +252,16 @@ def export_obd_report(report,path,inputs=()):
                 if r['advertised_support']!='SUPPORTED' and not r['response_observed']:continue
                 blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (r['request'],r['name'],r['advertised_support'],r['response_observed'],'; '.join(r['facts'])))+'</tr>')
             blocks.append('</table><details><summary>Original bitmap ledger</summary><pre>'+escape(json.dumps(g['bitmap_ledger'],indent=2))+'</pre></details>')
+            blocks.append('<h3>Offline PID Explorer · separate evidence gates</h3><p>ADVERTISED → RECORDED POSITIVE → FRAMED → LENGTH VERIFIED → LAYOUT VERIFIED → NUMERIC. Physical calibration remains UNVERIFIED. No unknown values are rated healthy.</p>')
+            for r in g['rows']:
+                if r['advertised_support']!='SUPPORTED' and not r['response_observed']:continue
+                blocks.append('<details><summary>'+escape(r['request']+' · '+r['name'])+'</summary><pre>'+escape(json.dumps(r['evidence_progression'],indent=2))+'</pre></details>')
         for q in session.get('field_quality',[]):
             blocks.append('<h2>Recorded field cadence / quality · '+escape(q['ecu'])+'</h2><p>'+escape(q['field_basis'])+'</p><p>'+escape(f"MAP byte ceiling samples {q['map_byte_ceiling_samples']} / numeric samples {q['map_numeric_samples']}; current encoding maximum {q['map_encoding_max_kpa']} kPa. "+q['map_limit'])+'</p><p>'+escape(q['vgt_limit']+' '+q['interpretation'])+'</p><table><tr><th>Field</th><th>Samples</th><th>Min / median / max</th><th>Cadence mean / max s</th></tr>')
             for f in q['fields']:blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (f['sensor_id']+' / '+f['unit'],f['samples'],f"{f['minimum']} / {f['median']} / {f['maximum']}",f"{f['sampling_gap_seconds']['mean']} / {f['sampling_gap_seconds']['maximum']}"))+'</tr>')
             blocks.append('</table>')
         for g in session['performance']:
-            d=g['latency_ms'];blocks.append('<h2>Communication summary · '+escape(g['mode'])+'</h2><p>'+escape(f"Sent {g['transmitted_requests']} | observed count/span {g['actual_transmitted_rate_hz']} req/s | latency p50 {d['p50']} / p95 {d['p95']} / p99 {d['p99']} ms | spacing violations {g['hard_four_hz_spacing_violations']}")+'</p><p>'+escape(str(g['categories']))+'</p><table><tr><th>ECU/request</th><th>Sent</th><th>Latency p50 / p95 / p99 ms</th><th>Sampling mean / max s</th></tr>')
+            d=g['latency_ms'];blocks.append('<h2>Communication summary · '+escape(g['mode'])+'</h2><p>'+escape(f"Sent {g['transmitted_requests']} | COUNT_OVER_SEND_SPAN N/span {g['actual_transmitted_rate_hz']} req/s | INTERVALS_OVER_SEND_SPAN (N−1)/span {g['interval_rate_hz']} req/s | latency p50 {d['p50']} / p95 {d['p95']} / p99 {d['p99']} ms | spacing violations {g['hard_four_hz_spacing_violations']}")+'</p><p>'+escape(str(g['categories']))+'</p><table><tr><th>ECU/request</th><th>Sent</th><th>Latency p50 / p95 / p99 ms</th><th>Sampling mean / max s</th></tr>')
             for r in g['per_ecu_pid']:
                 d=r['latency_ms'];gap=r['sampling_gap_seconds'];blocks.append('<tr>'+''.join('<td>'+escape(str(v))+'</td>' for v in (r['ecu']+' / '+r['command'],r['sent_attempts'],f"{d['p50']} / {d['p95']} / {d['p99']}",f"{gap['mean']} mean / {gap['maximum']} max"))+'</tr>')
             blocks.append('</table>')
