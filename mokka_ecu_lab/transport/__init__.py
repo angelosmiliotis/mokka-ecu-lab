@@ -39,6 +39,7 @@ class SafeTransport:
         self.rate = 4.0
         self.last_wire_ns = None
         self._last_send_ns = 0
+        self.wire_send_count = 0 # All admitted attempts, including uncertain failed writes.
 
     def exchange(self, command: str, stop: threading.Event, timeout: float = 6.0) -> bytes:
         if threading.get_ident() != self.owner:
@@ -68,6 +69,7 @@ class SafeTransport:
         self.last_wire_ns = time.monotonic_ns()
         self._last_send_ns = self.last_wire_ns
         self.last_send = self.last_wire_ns / 1e9
+        self.wire_send_count += 1
         return self._exchange(command, stop, timeout)
 
     def close(self):
