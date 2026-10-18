@@ -9,7 +9,7 @@ def test_ui_offline_and_shutdown(tmp_path,qt_app):
     window = MainWindow(tmp_path,validation=True)
     try:
         app.processEvents(); window.drain()
-        assert window.tabs.count() == 13 and window.tabs.currentIndex()==7
+        assert window.tabs.count() == 14 and window.tabs.currentIndex()==7
         assert window.tabs.tabText(11)=='Higher-rate research'
         assert window.tabs.tabText(12)=='Workspace / Storage'
         assert window.workspace_panel.jobs.future is None
