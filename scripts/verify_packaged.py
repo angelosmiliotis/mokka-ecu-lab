@@ -52,6 +52,7 @@ assert standard['passed'] and standard['primary_actions']==['Connect','Start Ses
 assert len(standard['scheduled_pids'])==13 and standard['stored_017a_raw_frames']>=2
 assert standard['adapter_disconnected'] and standard['automatic_bundle_verified'] and standard['monitoring_errors']==0
 assert all(s['connected_idle_after_finish'] and s['same_transport_retained'] and s['idle_requests']==0 and s['idle_observed_seconds']>=60 and s['explicit_disconnect_verified'] for s in (standard,expanded,critical))
+assert all(s['passive_idle_receipt_verified'] and s['passive_verification_seconds']>=60 and s['original_bundle_unchanged_after_idle'] for s in (standard,expanded,critical))
 _,members=__import__('mokka_ecu_lab.research.evidence',fromlist=['read_bundle']).read_bundle(standard['bundle_path'])
 assert json.loads(members['acquisition-receipt.json'])['dpf_proof_met_before_close']
 result=dict(actual_process_exits=exits,stationary_benchmark=benchmark,experimental_fake_com=experimental,critical_scheduled_pids=13,maintenance=maintenance,expanded_scheduled_pids=36,expanded_stored_017a_raw_frames=expanded['stored_017a_raw_frames'],source='SIMULATED',private_input_used=False,
@@ -61,5 +62,6 @@ result=dict(actual_process_exits=exits,stationary_benchmark=benchmark,experiment
     standard_primary_actions=standard['primary_actions'],standard_scheduled_pids=13,
     standard_stored_017a_raw_frames=standard['stored_017a_raw_frames'],standard_automatic_bundle_verified=True,
     standard_connected_idle_after_export=True,standard_explicit_disconnect_verified=True,session_idle_observed_seconds=standard['idle_observed_seconds'])
+result['passive_post_export_receipts_verified']=3
 (output/'packaged-validation.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
 print(json.dumps(result))
