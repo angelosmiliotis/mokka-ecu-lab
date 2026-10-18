@@ -1,0 +1,79 @@
+{
+  "version": "0.2.14",
+  "source": "SYNTHETIC_SOFTWARE_VALIDATION",
+  "private_vehicle_inputs_in_public_fixtures": false,
+  "hardware_connected": false,
+  "physical_validation_pending": true,
+  "tests_passed": 942,
+  "regression_seconds": 522.01,
+  "packaged_gui_exits": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "passive_sixty_second_receipts": 3,
+  "idle_wire_requests": 0,
+  "native_windows_geometry_checks": 420,
+  "actual_qt_dpi_ratios": [
+    1,
+    1.25,
+    1.5
+  ],
+  "physical_resolutions": [
+    [
+      1280,
+      720
+    ],
+    [
+      1366,
+      768
+    ],
+    [
+      1536,
+      864
+    ],
+    [
+      1920,
+      1080
+    ]
+  ],
+  "compiled_gui_modules": 66,
+  "compiled_dispatcher_modules": 25,
+  "compiled_mismatches": 0,
+  "windows_archive_members": 834,
+  "packaged_upgrade_transactions": 5,
+  "isolated_windows_shortcuts_verified": true,
+  "same_shortcut_and_dispatcher_bytes_preserved": true,
+  "public_analyzer_byte_comparisons": 18,
+  "normal_live_limit_req_s": 4,
+  "experimental_five": "FAKE_COM_BYTES_VIRTUAL_TIME_ONLY",
+  "physical_experimental_backend": "ABSENT_LOCKED",
+  "owner_installation": "SEPARATE_POST_PUBLICATION_APPROVAL_AND_DESKTOP_PROOF_REQUIRED",
+  "benchmark_runs": [
+    {
+      "rate": 2,
+      "requests": 115,
+      "duration_seconds": 60.09299999999985,
+      "minimum_wire_gap_ms": 500.0
+    },
+    {
+      "rate": 3,
+      "requests": 168,
+      "duration_seconds": 60.0619999999999,
+      "minimum_wire_gap_ms": 343.0
+    },
+    {
+      "rate": 4,
+      "requests": 224,
+      "duration_seconds": 60.01500000000033,
+      "minimum_wire_gap_ms": 250.0
+    }
+  ],
+  "screenshots": "CONSTRUCTED_UI_PROJECTIONS; neither owner deployment nor hardware proof"
+}
