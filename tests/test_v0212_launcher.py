@@ -233,9 +233,11 @@ def test_copy_failure_preserves_partial_files_for_explicit_recovery(prepared, tm
     before = digest(original)
     plan = preview(prepared, tmp_path)
     original_open = Path.open
+    writes=[]
     def fail_second_copy(path, mode='r', *args, **kwargs):
-        if path == launcher.config and mode == 'xb':
-            raise OSError('constructed interrupted copy')
+        if path.parent == launcher.root and mode == 'xb':
+            writes.append(path)
+            if len(writes)==2:raise OSError('constructed interrupted copy')
         return original_open(path, mode, *args, **kwargs)
     monkeypatch.setattr(Path, 'open', fail_second_copy)
     with pytest.raises(OSError, match='interrupted copy'):

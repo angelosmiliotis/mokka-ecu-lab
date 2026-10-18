@@ -196,7 +196,11 @@ def test_retained_invalid_handle_or_changed_protocol_fails_closed(com,fast_clock
         wait_state(w,lambda d:d['state']=='FAILED');w.submit('session_finish')
         wait_state(w,lambda d:d['state']=='EXPORTED')
         assert len(h.wire)==before+1 and h.wire[-1][1]=='ATDPN'
-    else:until(lambda:w.transport is None);assert len(h.wire)==before
+    else:
+        # Closing the handle precedes the serialized worker's reconnect state.
+        # Wait for completion rather than sampling that intermediate transition.
+        until(lambda:w.transport is None and w.requires_reconnect)
+        assert len(h.wire)==before
     assert not w.transport and w.requires_reconnect
 
 
