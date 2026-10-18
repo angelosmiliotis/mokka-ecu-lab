@@ -21,6 +21,8 @@ def main():
     parser.add_argument('--dpf-output',type=Path,help='Fresh private DPF HTML / JSON report path')
     parser.add_argument('--obd-bundles',nargs='+',type=Path,help='Private passive inventory/performance analysis; no transport')
     parser.add_argument('--obd-output',type=Path,help='Fresh private OBD HTML / JSON report path')
+    parser.add_argument('--explorer-bundles',nargs='+',type=Path,help='Private offline PID and field evidence replay; no transport')
+    parser.add_argument('--explorer-output',type=Path,help='Fresh private Explorer CSV / JSON path outside Git')
     parser.add_argument('--analyze-bundles',nargs='+',type=Path,help='Offline local Research Bundle analysis; starts no GUI or transport')
     parser.add_argument('--research-output',type=Path,help='Separate private JSON analysis destination')
     parser.add_argument('--research-html',type=Path,help='Optional self-contained private HTML report; no network resources')
@@ -30,11 +32,16 @@ def main():
     parser.add_argument('--phase-output',type=Path,help='Fresh private HTML / JSON comparison base path')
     args = parser.parse_args()
     session_validation_requested=args.session_smoke_test or args.expanded_session_smoke_test or args.critical_session_smoke_test
-    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.expanded_session_smoke_test,args.critical_session_smoke_test,args.benchmark_smoke_test,args.sequential_benchmark_smoke_test,args.maintenance_smoke_test,args.experimental_engine_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles,args.obd_bundles))>1:
+    if sum(bool(v) for v in (args.smoke_test,args.full_auto_smoke_test,args.session_smoke_test,args.expanded_session_smoke_test,args.critical_session_smoke_test,args.benchmark_smoke_test,args.sequential_benchmark_smoke_test,args.maintenance_smoke_test,args.experimental_engine_smoke_test,args.analyze_bundles,args.compare_phases,args.dpf_bundles,args.obd_bundles,args.explorer_bundles))>1:
         parser.error('Choose one validation / offline analysis mode')
     if (args.smoke_test or args.full_auto_smoke_test or session_validation_requested or args.benchmark_smoke_test or args.sequential_benchmark_smoke_test or args.maintenance_smoke_test or args.experimental_engine_smoke_test) and args.data_dir.exists():
         parser.error('Synthetic validation requires a fresh --data-dir; existing user data is preserved')
     if bool(args.maintenance_smoke_test)!=bool(args.maintenance_reference_zips):parser.error('Explicit maintenance validation requires two public reference ZIPs; references cannot enable normal-startup maintenance')
+    if args.explorer_bundles:
+        if not args.explorer_output:parser.error('--explorer-output required with --explorer-bundles')
+        from mokka_ecu_lab.analysis.explorer import analyze_explorer,export_explorer
+        export_explorer(analyze_explorer(args.explorer_bundles),args.explorer_output,args.explorer_bundles);return 0
+    if args.explorer_output:parser.error('--explorer-output requires --explorer-bundles')
     if args.obd_bundles:
         if not args.obd_output:parser.error('--obd-output required with --obd-bundles')
         from mokka_ecu_lab.analysis.obd import analyze_obd,export_obd_report
