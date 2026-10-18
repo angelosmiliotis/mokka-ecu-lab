@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.15 — Offline PID and field evidence explorer
+
+- Separate searchable/filterable offline Explorer replays original checksum-covered bytes by bundle, responder, source and context. PID groups expose individual numeric, status/history and configuration fields, absent/invalid states, exact definition metadata, independent support/layout gates, bounded RAW references, last attempt/value/age and profile cadence distributions. No physical sensor count or calibration claim is inferred.
+- Private CSV/JSON exports preserve source provenance and unknowns. Exact duplicate evidence is rejected, distinct zero-request failures remain distinct, configuration does not cross source contexts, and no import/filter/export sends an OBD request. CSV cells are guarded against spreadsheet formula injection.
+- Pure offline 0101 readiness interpretation combines the public legacy byte basis with EPA ignition mapping, masks MIL/DTC count and gates monitor applicability. It is absent from the LIVE allowlist. Unproven alternate DPF/oxygen layouts and undefined identifiers remain unknown; the licensed current annex has not supplied a new byte definition.
+- Verify 60s freezes its terminal observation, shows PASSED and a copyable private receipt path, offers report/folder actions and session-grouped History access. Exclusive atomic receipt publication can retry without overwriting existing data. Later Disconnect or handle failure does not rewrite a successful historical proof.
+- The approved upgrade transaction, same CURRENT-following shortcuts, rollback, flat private Reports, one serialized worker and normal aggregate four/s ceiling are retained. Five/s remains fake COM only with physical backend locked; no new diagnostic command is authorized.
+
 ## 0.2.14 — Approved upgrade transaction and passive post-export evidence
 
 - One approved install/startup-check/atomic-CURRENT/dispatcher verification transaction replaces the split installation and activation workflow. The GUI closes before a separate packaged helper changes versions; old builds, private data and the same verified Desktop/Start Menu shortcut bytes remain intact. Exact state/digest/shortcut/process checks, a Windows old-executable start guard, failure rollback and explicit recovery protect updates. Older installs require explicit rollback rather than accidental downgrade.

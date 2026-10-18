@@ -4,7 +4,7 @@ $taskOwnedWorkCreated = $false
 Push-Location -LiteralPath $PSScriptRoot
 try {
     $taskBuildStamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)
-    $taskBuildCache = Join-Path $env:LOCALAPPDATA 'MokkaECULab\Development\v0.2.14'
+    $taskBuildCache = Join-Path $env:LOCALAPPDATA 'MokkaECULab\Development\v0.2.15'
     if (-not $OutputDirectory) {
         # Candidate outputs stay outside checkout/OneDrive; existing release contents are untouched.
         $taskCandidates = Join-Path $taskBuildCache 'Candidates'

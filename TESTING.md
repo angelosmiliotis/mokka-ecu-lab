@@ -1,5 +1,21 @@
 # Testing and vehicle validation
 
+## Version 0.2.15 release validation
+
+**967 tests passed** in the final full regression (550.44 s). Constructed cases cover independent support/response/layout/polling gates, field multiplicity and absent subfields, staleness, context conflicts, duplicate journals including distinct zero-request failures, repeated-send evidence, exact alternate RAW preservation, private exports and CSV formula-injection protection. Extended decode annotations are not mistaken for a Discovery phase. Exact selected-container SHA-256, canonical verified-member manifest identity and journal SHA-256 are separately labeled and checked.
+
+The pure offline 0101 tests cover ignition-specific applicability, MIL/DTC masking, readiness completion, wrong lengths and reserved bits. It remains absent from the LIVE allowlist. No new vehicle decoder, sensor calibration or diagnostic request is claimed.
+
+**Nine final Windows packaged GUI workflows exited 0**, including two startups, Full Auto, standard/expanded/Critical Sessions, sequential 2/3/4 Benchmarks, the fake-COM byte engine and maintenance. Three Sessions each observed at least sixty actual seconds after Finish with the same retained simulated handle, zero idle sends and separate immutable receipts, then verified explicit Disconnect. The terminal receipt/time tests also continue past 400 seconds and later handle loss without changing saved evidence; exclusive atomic publication handles failed writes and safe retry.
+
+**Five final packaged updater transactions passed** with already published official reference ZIPs in isolated Greek/redirected Windows paths: install/activate, repeat, rollback, return to CURRENT and fresh shortcuts. Stable link/dispatcher bytes and a constructed personal-data sentinel remained unchanged. These checks do not install a release on the owner's Desktop; that requires separate exact approval and actual shortcut acceptance.
+
+Native Windows verification covers **480 geometry/viewport checks** at actual Qt ratios 1/1.25/1.5 and 1280x720, 1366x768, 1536x864 and 1920x1080, with focused current Explorer detail/receipt review. Vertical pages and technical tables remain scrollable. All public construction data and images are synthetic; private evidence and its GUI replays stay outside Git and assets. Source and executable match **70 GUI modules and 25 dispatcher modules**, with zero mismatches. All **834** Windows ZIP members pass CRC and individual SHA-256 verification.
+
+The four offline analyzers (OBD, DPF, evidence and the new Explorer) passed **26 byte-identical synthetic CSV/JSON/HTML artifact comparisons**, including separate drive, Benchmark and wrapper inputs plus multi-source Explorer replay. Separate private parity passed locally without publishing those inputs or derived reports.
+
+Normal operation retains the fixed READ-ONLY allowlist, one serialized worker, the existing profiles and **at most four aggregate LIVE requests/s**, including preparation. Five/s remains an actual in-memory fake-COM byte engine with virtual timing and zero hardware transmissions; the physical backend remains LOCKED. The approved CURRENT/ROLLBACK transaction and same permanent Desktop target are preserved. No new physical vehicle test, licensed alternate DPF/oxygen layout, physical sensor count, soot/ash/regeneration inference, turbo-lag result or SCR efficiency claim is implied. See [workflow](docs/V0215_WORKFLOW.md) and [definition sources](research/V0215_SOURCE_REGISTER.md).
+
 ## Version 0.2.14 release validation
 
 **942 tests passed** in the final complete regression (522.01 s). New constructed cases cover one approved install/activate transaction, unchanged redirected Desktop/Start Menu links, fresh setup, explicit rollback, same-version repeat, wrong hashes, conflicting shortcuts, running/locked executables, permission/offline/storage/dispatch/interrupted-pointer faults, and preserving originals. The retained-port-loss test waits for the serialized worker's complete reconnect transition instead of sampling the intermediate closed-handle state.
