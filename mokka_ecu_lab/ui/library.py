@@ -32,6 +32,7 @@ class HistoryPanel(QWidget):
         for name,fn in [('Flatten existing Reports…',lambda:self.jobs.start(self.library.preview_flatten,self.show_plan)),('Preview legacy migration…',self.preview_migration),('Resume report migration…',self.resume_migration),('Rollback report migration…',self.rollback_migration),('Cancel copy migration',self.cancel_migration.set),('Recover index offline',lambda:self.jobs.start(self.library.recover_index,lambda _:self.refresh())),('Storage usage',self.usage)]:self.storage_menu.addAction(name,fn)
         self.storage_button=window.button('Organize Reports…',lambda:None);self.storage_button.setMenu(self.storage_menu);row.addWidget(self.storage_button)
         for name,fn in [('Annotate timeline offline…',self.annotate),('View annotations',self.view_annotations),('Open data folder',lambda:QDesktopServices.openUrl(QUrl.fromLocalFile(str(window.root))))]:row.addWidget(window.button(name,fn))
+        row.addWidget(window.button('Post-Finish verification reports',self.idle_reports))
         layout.addLayout(row);self.include_annotations=QCheckBox('Include private USER_REPORTED annotations in exported run ZIP');layout.addWidget(self.include_annotations)
         self.status=caption('No history loaded. Legacy files stay in their existing locations until an explicit approved copy.');layout.addWidget(self.status)
         self.jobs=LocalJobs(self,self.status)
@@ -152,3 +153,31 @@ class HistoryPanel(QWidget):
     def view_annotations(self):
         row=self.one()
         if row:preview_dialog(self,'Offline timeline · user reported with uncertainty',self.library.annotations(row['library_id']))
+
+    def idle_reports(self):
+        row=self.one()
+        if not row:return
+        session=row['session_id']
+        if not isinstance(session,str) or not session.isalnum():self.status.setText('Invalid immutable session ID');return
+        from mokka_ecu_lab.idle_evidence import read_idle_receipt
+        directory=self.window.root/'PostExportEvidence'/session
+        def read():
+            from mokka_ecu_lab.local_paths import linked
+            if any(linked(p) for p in [directory,*directory.parents]):raise ValueError('Linked receipt folder blocked')
+            files=sorted(directory.glob('post-export-idle-*.json'))
+            if len(files)>256:raise ValueError('Receipt folder exceeds 256 entries')
+            rows=[dict(path=str(p),receipt=read_idle_receipt(p)) for p in files]
+            if any(r['receipt'].get('session_id')!=session for r in rows):raise ValueError('Receipt session differs from selected history group')
+            return rows
+        self.jobs.start(read,self.show_idle_reports)
+
+    def show_idle_reports(self,rows):
+        if not rows:self.status.setText('No separate passive verification receipt saved for this session. Export completion alone is not idle proof.');return
+        labels=[r['receipt']['state']+' · '+f"{r['receipt']['verification_elapsed_seconds']:.2f}s"+' · '+r['path'] for r in rows]
+        choice,ok=QInputDialog.getItem(self,'Private post-Finish evidence','Immutable receipt; later connection state is separate:',labels,editable=False)
+        if ok:
+            from mokka_ecu_lab.idle_evidence import read_idle_receipt
+            path=rows[labels.index(choice)]['path']
+            try:read_idle_receipt(path)
+            except (ValueError,OSError) as exc:self.status.setText(str(exc));return
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))

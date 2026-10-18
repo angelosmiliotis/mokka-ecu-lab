@@ -155,6 +155,9 @@ class MainWindow(QMainWindow):
         from .workspace import WorkspacePanel
         self.higher_rate_panel=HigherRatePanel();self.tabs.addTab(self.higher_rate_panel,'Higher-rate research')
         self.workspace_panel=WorkspacePanel(self);self.tabs.addTab(self.workspace_panel,'Workspace / Storage')
+        from .evidence_explorer import EvidenceExplorer
+        self.evidence_panel=EvidenceExplorer(self);self.tabs.addTab(self.evidence_panel,'PID Evidence Explorer')
+        self.tabs.currentChanged.connect(lambda index:self.connection_panel.hide() if index==13 else None)
         self.ensurePolished()
         for widget in self.findChildren(QWidget): widget.ensurePolished()
         # Keep the established seven page indices/API, with scrollable content.
@@ -1650,7 +1653,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.higher_rate_panel.stop_model()
         self.higher_rate_panel.stop_fake()
-        if any(panel.jobs.busy() for panel in (self.history_panel,self.versions_panel,self.workspace_panel)):
+        if any(panel.jobs.busy() for panel in (self.history_panel,self.versions_panel,self.workspace_panel,self.evidence_panel)):
             self.notice('Waiting for the bounded offline copy/verification to finish; original files are preserved.');event.ignore();return
         self.timer.stop()
         self.settings.setValue("sensor_order", [self.sensor_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.sensor_list.count())])
@@ -1659,6 +1662,6 @@ class MainWindow(QMainWindow):
         if self.worker.is_alive():
             self.timer.start(100); self.notice("Waiting for recording flush. Close again when finished."); event.ignore()
         else:
-            self.history_panel.jobs.close();self.versions_panel.jobs.close();self.workspace_panel.jobs.close()
+            self.history_panel.jobs.close();self.versions_panel.jobs.close();self.workspace_panel.jobs.close();self.evidence_panel.jobs.close()
             QApplication.instance().removeNativeEventFilter(self.power_filter)
             event.accept()

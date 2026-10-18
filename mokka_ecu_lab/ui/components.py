@@ -82,7 +82,7 @@ class FlowLayout(QLayout):
 
 
 class Sidebar(QWidget):
-    ORDER = ((7, 'Session Dashboard', 'dashboard'), (8, 'Benchmark', 'discovery'), (9,'History / Reports','sessions'),(10,'App Versions','research'),(12,'Workspace / Storage','sessions'),(0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
+    ORDER = ((7, 'Session Dashboard', 'dashboard'), (8, 'Benchmark', 'discovery'), (13,'PID Evidence Explorer','explorer'), (9,'History / Reports','sessions'),(10,'App Versions','research'),(12,'Workspace / Storage','sessions'),(0, 'Dashboard', 'dashboard'), (6, 'Drive Capture', 'capture'),
              (1, 'Sessions', 'sessions'), (3, 'Sensor Explorer', 'explorer'), (2, 'Raw Data', 'raw'),
              (5, 'Discovery', 'discovery'), (4, 'Research', 'research'), (11, 'Higher-rate research', 'research'))
 
@@ -92,11 +92,11 @@ class Sidebar(QWidget):
         layout = QVBoxLayout(self); layout.setContentsMargins(8, 14, 8, 12); layout.setSpacing(4)
         more=QWidget();more_layout=QVBoxLayout(more);more_layout.setContentsMargins(0,0,0,0);more_layout.setSpacing(4)
         area=QScrollArea();area.setWidgetResizable(True);area.setFrameShape(QFrame.Shape.NoFrame);area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);area.setWidget(more)
-        keys={7:'Alt+1',8:'Alt+2',0:'Alt+3',6:'Alt+4',1:'Alt+5',3:'Alt+6',2:'Alt+7',5:'Alt+8',4:'Alt+9',9:'Ctrl+Alt+H',10:'Ctrl+Alt+V',11:'Ctrl+Alt+E',12:'Ctrl+Alt+W'}
+        keys={7:'Alt+1',8:'Alt+2',0:'Alt+3',6:'Alt+4',1:'Alt+5',3:'Alt+6',2:'Alt+7',5:'Alt+8',4:'Alt+9',9:'Ctrl+Alt+H',10:'Ctrl+Alt+V',11:'Ctrl+Alt+E',12:'Ctrl+Alt+W',13:'Ctrl+Alt+P'}
         for n, (index, label, symbol) in enumerate(self.ORDER):
-            target=layout if n<5 else more_layout
-            if n in (0, 5, 8):
-                group = QLabel(('OVERVIEW', 'DATA', 'RESEARCH')[(0, 5, 8).index(n)])
+            target=layout if n<6 else more_layout
+            if n in (0, 6, 9):
+                group = QLabel(('OVERVIEW', 'DATA', 'RESEARCH')[(0, 6, 9).index(n)])
                 group.setObjectName('caption');target.addWidget(group);self.group_labels.append(group)
             b = QPushButton(label); b.setObjectName('nav'); b.setIcon(icon(symbol)); b.setCheckable(True)
             b.setAccessibleName(label); b.setToolTip(label+' · '+keys[index])
@@ -116,9 +116,9 @@ class Sidebar(QWidget):
     def set_compact(self, compact):
         self.compact = compact; self.setFixedWidth(max(100,METRICS['compact_sidebar']) if compact else METRICS['sidebar'])
         for index, label, symbol in self.ORDER:
-            self.buttons[index].setText(({8:'Benchmark',7:'Session',9:'History',10:'Versions',11:'Higher rate',12:'Workspace'}.get(index,'')) if compact else self.tabs.tabText(index))
-            self.buttons[index].setIcon(QIcon() if compact and index in (7,8,9,10,11,12) else icon(symbol))
-            self.buttons[index].setStyleSheet('padding-left: 4px; padding-right: 4px;' if compact and index in (7,8,9,10,11,12) else '')
+            self.buttons[index].setText(({8:'Benchmark',7:'Session',9:'History',10:'Versions',11:'Higher rate',12:'Workspace',13:'PIDs'}.get(index,'')) if compact else 'PID Evidence' if index==13 else self.tabs.tabText(index))
+            self.buttons[index].setIcon(QIcon() if compact and index in (7,8,9,10,11,12,13) else icon(symbol))
+            self.buttons[index].setStyleSheet('padding-left: 4px; padding-right: 4px;' if compact and index in (7,8,9,10,11,12,13) else '')
         for label in self.group_labels: label.setVisible(not compact)
         self.local.setVisible(not compact)
 

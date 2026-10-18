@@ -4,7 +4,7 @@ import time
 from datetime import datetime,timezone
 from PySide6.QtCore import Qt,QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QLabel,QGroupBox,QTableWidget,QTableWidgetItem,QCheckBox,QTextEdit,QHeaderView,QAbstractItemView,QComboBox
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QLabel,QGroupBox,QTableWidget,QTableWidgetItem,QCheckBox,QTextEdit,QHeaderView,QAbstractItemView,QComboBox,QLineEdit
 from .components import FlowLayout,caption,page_heading
 from .theme import style_table
 from mokka_ecu_lab.auto_capture import ALL_SENSOR_PIDS,PRESETS
@@ -33,6 +33,12 @@ class SessionPanel(QWidget):
         self.metrics=QLabel(); self.metrics.setWordWrap(True); layout.addWidget(self.metrics)
         self.idle_status=caption('Post-Finish Bluetooth idle on this vehicle is unverified until separate passive evidence is collected.');layout.addWidget(self.idle_status)
         self.idle_verify=window.button('Verify 60s silent idle · no OBD requests',lambda:window.send('session_idle_verify'));layout.addWidget(self.idle_verify)
+        self.idle_connection=caption('Current connection: disconnected');layout.addWidget(self.idle_connection)
+        self.idle_path=QLineEdit();self.idle_path.setReadOnly(True);self.idle_path.setAccessibleName('Exact private verification report path');layout.addWidget(self.idle_path)
+        idle_actions=FlowLayout()
+        self.idle_open=window.button('Open verification report',lambda:self.open_idle_report(False))
+        self.idle_folder=window.button('Open verification folder',lambda:self.open_idle_report(True))
+        idle_actions.addWidget(self.idle_open);idle_actions.addWidget(self.idle_folder);layout.addLayout(idle_actions)
         dpf_box=QGroupBox('017A RAW research evidence'); dpf_layout=QVBoxLayout(dpf_box)
         self.dpf=QLabel(); self.dpf.setWordWrap(True); dpf_layout.addWidget(self.dpf)
         dpf_layout.addWidget(caption('Six-byte replies have no verified pressure, soot, ash or regeneration meaning. READY requires two stored polling replies and worker-confirmed scheduling; Discovery does not count.'))
@@ -104,13 +110,29 @@ class SessionPanel(QWidget):
         path=self.snapshot.get('bundle_path') or self.snapshot.get('journal_path')
         if path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
+    def open_idle_report(self,folder):
+        from mokka_ecu_lab.idle_evidence import read_idle_receipt
+        path=self.idle_path.text()
+        if not path:return
+        try:read_idle_receipt(path)
+        except (ValueError,OSError) as exc:self.idle_status.setText('Private receipt verification failed: '+str(exc));return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent if folder else Path(path))))
+
     def update(self,*_):
         w=self.window; d=self.snapshot; state=d.get('state','DISCONNECTED'); active=d.get('active',False)
         pending=any(a.startswith('session_') for a in w.pending_actions)
         idle_connected=bool(d.get('adapter_open') and not w.requires_reconnect and not active)
         idle=d.get('idle_validation') or {}
         self.idle_verify.setEnabled(bool(idle_connected and state=='EXPORTED' and idle.get('state')=='NOT_REQUESTED'))
-        self.idle_status.setText(('Passive idle '+idle.get('state','')+f' · after Finish {idle.get("post_finish_elapsed_seconds",0):.1f}s · verification {idle.get("verification_elapsed_seconds",0):.1f}/60s · sends {idle.get("start_send_count",0)} → {idle.get("current_send_count",0)} · idle requests {idle.get("idle_requests",0)}\n'+idle.get('reason','')+('\nPrivate sidecar: '+idle['receipt_path'] if idle.get('receipt_path') else '')) if idle else 'No post-export silent-idle proof. LIVE retention must be observed separately; export completion alone is not proof.')
+        terminal=idle.get('state') in {'VERIFIED','INTERRUPTED'}
+        elapsed=idle.get('verification_elapsed_seconds',0)
+        label='PASSED' if idle.get('state')=='VERIFIED' else idle.get('state','NOT REQUESTED')
+        duration=f'{elapsed:.2f}s · completed observation' if terminal else f'{elapsed:.1f} / 60s'
+        self.idle_status.setText((f'Passive idle {label} · {duration} · sends {idle.get("start_send_count",0)} → {idle.get("current_send_count",0)} · idle requests {idle.get("idle_requests",0)}\n'+idle.get('reason','')) if idle else 'No post-export silent-idle proof. Export completion alone is not proof.')
+        connection=getattr(w,'connection_detail',None) or {}
+        self.idle_connection.setText('CURRENT connection: '+str(connection.get('stage',d.get('connection_state','DISCONNECTED')))+' · '+str(connection.get('reason',d.get('reason','')))+'\nSaved verification describes its bounded observation only; ECU liveness remains untested.')
+        self.idle_path.setText(idle.get('receipt_path') or '')
+        self.idle_open.setEnabled(bool(idle.get('receipt_path')));self.idle_folder.setEnabled(bool(idle.get('receipt_path')))
         self.connect.setEnabled(not active and not pending and not idle_connected and not d.get('isolated_handle') and state not in {'CONNECTED','CONNECTING','FINALIZING'} and not w.recording_id)
         self.start.setEnabled((state=='CONNECTED' or state=='EXPORTED' and idle_connected or (getattr(w,'connection_detail',None) or {}).get('stage')=='CONNECTED_IDLE' and w.adapter_open) and not active and not pending and not w.requires_reconnect and not w.recording_id and not w.capture_active)
         self.finish.setEnabled(active and not pending and state!='FINALIZING')
