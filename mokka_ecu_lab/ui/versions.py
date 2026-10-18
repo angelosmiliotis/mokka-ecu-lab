@@ -1,12 +1,14 @@
 """Explicit verified-install/current/rollback previews; never automatic cleanup."""
-import os,tempfile
+import os,tempfile,subprocess,sys,uuid
 from pathlib import Path
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QWidget,QVBoxLayout,QLineEdit,QComboBox,QFileDialog,QCheckBox
 from .components import caption,FlowLayout,page_heading
 from .local_jobs import LocalJobs,preview_dialog
-from mokka_ecu_lab.versions import ManagedVersions,release_info
+from mokka_ecu_lab.versions import ManagedVersions,release_info,latest_release_info
+from mokka_ecu_lab.upgrade import ApprovedUpgrade
+from mokka_ecu_lab.library import write_json
 from mokka_ecu_lab.launcher import CurrentLauncher,shortcut_folders
 from mokka_ecu_lab import __version__
 
@@ -17,15 +19,20 @@ class VersionsPanel(QWidget):
         self.manager=ManagedVersions(root,window.root);layout=QVBoxLayout(self);layout.setSpacing(8)
         self.launcher=CurrentLauncher(self.manager,root.parent/'Launcher')
         page_heading(layout,'App Versions','Managed CURRENT + verified ROLLBACK. Personal data is separate. No automatic install, cleanup, file moves or deletion.')
-        self.identity=caption('Actual launch target and managed state are shown by Inventory preview.');layout.addWidget(self.identity)
+        self.identity=caption('Running version '+__version__+' · Managed CURRENT not checked · GitHub latest known: not checked (explicit lookup only)');layout.addWidget(self.identity)
+        self.latest_known=None
+        try:
+            initial=self.manager.state()
+            self.identity.setText('Running version '+__version__+' · Managed CURRENT '+str(initial['current'])+' · Rollback '+str(initial['previous'])+'\nGitHub latest known: not checked · Shortcut target '+str(self.launcher.exe)+' · pointer read only; Inventory verifies files.')
+        except Exception as exc:self.identity.setText('Running version '+__version__+' · Managed state INVALID / upgrade blocked: '+str(exc))
         self.build=QComboBox();self.build.setAccessibleName('Verified managed build');layout.addWidget(self.build)
         row=FlowLayout()
         for text,fn in [('Inventory / dry-run preview',self.inventory),('Set as CURRENT…',self.activate),('Rollback preview…',self.rollback),('Open managed versions',self.open_root),('Launch CURRENT',self.launch)]:row.addWidget(window.button(text,fn))
         layout.addLayout(row)
         self.tag=QLineEdit('v'+__version__);self.tag.setAccessibleName('Exact official release tag');layout.addWidget(self.tag)
         row=FlowLayout()
-        for text,fn in [('Install official release ZIP…',self.install),('Inspect exact standalone folder…',self.inspect),('Open GitHub releases',lambda:QDesktopServices.openUrl(QUrl('https://github.com/angelosmiliotis/mokka-ecu-lab/releases')))]:row.addWidget(window.button(text,fn))
-        layout.addLayout(row);layout.addWidget(caption('Install copies a SHA-verified official ZIP into a fresh managed folder and runs an isolated synthetic startup check. Activation changes a pointer only; the previous verified build remains available. Unmanaged versions require inspection and are never deleted here. GitHub assets are available only while retained upstream.'))
+        for text,fn in [('Install & activate verified release…',self.install),('Check latest official release',self.check_latest),('Inspect exact standalone folder…',self.inspect),('Open GitHub releases',lambda:QDesktopServices.openUrl(QUrl('https://github.com/angelosmiliotis/mokka-ecu-lab/releases')))]:row.addWidget(window.button(text,fn))
+        layout.addLayout(row);layout.addWidget(caption('One approval: install, isolated startup, atomic CURRENT activation and stable shortcut verification. The approving app closes first; no switching during LIVE use. Existing shortcuts keep the same target. Previous CURRENT remains ROLLBACK; personal data and old builds are preserved. Publication alone does not install a release.'))
         page_heading(layout,'One-click CURRENT launcher','Create a stable shortcut once, after installing and selecting a verified CURRENT build. It follows later CURRENT changes and rollback, and always starts disconnected.')
         self.launcher_identity=caption('Stable target: '+str(self.launcher.exe)+' · not installed or checked on this page visit.');layout.addWidget(self.launcher_identity)
         row=FlowLayout();self.desktop_shortcut=QCheckBox('Desktop shortcut');self.desktop_shortcut.setChecked(True)
@@ -44,19 +51,41 @@ class VersionsPanel(QWidget):
         self.last_inventory=report;self.build.clear()
         for b in report['builds']:
             if b.get('verified'):self.build.addItem(b['key']+' · '+b['role'],b['key'])
-        self.identity.setText('Launch: '+report['actual_launch_target']+' · CURRENT '+str(report['state']['current'])+' · ROLLBACK '+str(report['state']['previous']))
+        current=report['state']['current'];older=bool(current and tuple(map(int,__version__.split('.')))<tuple(map(int,current.split('-')[0][1:].split('.'))))
+        self.identity.setText('Running version '+__version__+' · Managed CURRENT '+str(current)+' · Rollback '+str(report['state']['previous'])+'\nGitHub latest known: '+str(self.latest_known or 'not checked')+' · Shortcut target '+str(self.launcher.exe)+'\nLaunch: '+report['actual_launch_target']+(' · WARNING: this running app is older than installed CURRENT; close and reopen the Desktop shortcut.' if older else ''))
         preview_dialog(self.window,'Exact managed version inventory · no cleanup actions',report)
     def install(self):
         path,_=QFileDialog.getOpenFileName(self,'Choose downloaded official Windows ZIP','','ZIP (*.zip)');tag=self.tag.text().strip()
-        if path:self.jobs.start(lambda:self.manager.preview_install(path,release_info(tag)),self.show_install)
+        if path:
+            if self.window.adapter_open or self.window.recording_id:self.status.setText('Finish Session and Disconnect before preparing an upgrade.');return
+            def prepare():
+                folders=shortcut_folders()
+                return ApprovedUpgrade(self.manager,self.launcher).preview(path,release_info(tag),folders['desktop'],folders['programs'],caller_pid=os.getpid())
+            self.jobs.start(prepare,self.show_install)
     def show_install(self,plan):
         self.last_install_preview=plan
-        preview_dialog(self.window,'Install COPY preview · official SHA / files / destination',plan,
-            lambda:self.jobs.start(lambda:self.manager.install(plan,plan['approval_token']),lambda r:self.status.setText('Verified build installed without activation: '+r['key'])))
+        preview_dialog(self.window,'Approve install + activate + verify · app closes before changes',plan,lambda:self.begin_approved_upgrade(plan),
+            approve_label='Approve this exact upgrade and close application safely')
+    def check_latest(self):
+        def received(info):
+            self.latest_known=info['tag'];self.tag.setText(info['tag']);self.status.setText('Latest published verified metadata: '+info['tag']+' · no download or installation performed. Choose its downloaded official ZIP.');self.identity.setText('Running '+__version__+' · GitHub latest known '+info['tag']+' · publication is not local installation. Refresh inventory for CURRENT/rollback/shortcut.')
+        self.jobs.start(latest_release_info,received)
+    def begin_approved_upgrade(self,plan):
+        if self.window.adapter_open or self.window.recording_id or self.window.capture_active or self.window.benchmark_state.get('active'):
+            self.status.setText('Upgrade cancelled: Finish and Disconnect first. No helper started.');return
+        folder=self.manager.root.parent/'Development/approved-upgrades'/uuid.uuid4().hex;folder.mkdir(parents=True)
+        path=folder/'approved-plan.json';receipt=folder/'result.json';write_json(path,plan)
+        helper=Path(sys.executable).parent/'_internal/launcher/MokkaECULabLauncher.exe'
+        command=[str(helper)] if getattr(sys,'frozen',False) else [sys.executable,str(Path(__file__).resolve().parents[2]/'run_launcher.py')]
+        if getattr(sys,'frozen',False) and not helper.is_file():self.status.setText('Packaged upgrade helper missing; no changes.');return
+        subprocess.Popen(command+['--apply-upgrade-plan',str(path),'--approval-token',plan['approval_token'],'--wait-parent',str(os.getpid()),'--receipt',str(receipt),'--show-upgrade-result'],creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.status.setText('Approved helper waiting for this app to close. Result: '+str(receipt));self.window.close()
     def activate(self):
         key=self.build.currentData()
         if not key:self.status.setText('Load inventory and select a verified build.');return
-        self.jobs.start(lambda:self.manager.preview_activation(key),self.show_activation)
+        def prepare():
+            folders=shortcut_folders();return ApprovedUpgrade(self.manager,self.launcher).preview_installed(key,folders['desktop'],folders['programs'],caller_pid=os.getpid())
+        self.jobs.start(prepare,self.show_install)
     def show_activation(self,plan):
         self.last_activation_preview=plan
         preview_dialog(self.window,'CURRENT / ROLLBACK pointer preview · no executable moves',plan,
@@ -66,7 +95,9 @@ class VersionsPanel(QWidget):
         try:
             key=self.manager.state()['previous']
             if not key:raise ValueError('No verified managed rollback available yet')
-            self.jobs.start(lambda:self.manager.preview_activation(key),self.show_activation)
+            def prepare():
+                folders=shortcut_folders();return ApprovedUpgrade(self.manager,self.launcher).preview_installed(key,folders['desktop'],folders['programs'],caller_pid=os.getpid())
+            self.jobs.start(prepare,self.show_install)
         except Exception as exc:self.status.setText(str(exc))
     def inspect(self):
         folder=QFileDialog.getExistingDirectory(self,'Select one exact unmanaged executable folder for read-only inspection')

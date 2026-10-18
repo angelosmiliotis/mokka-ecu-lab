@@ -31,6 +31,8 @@ class SessionPanel(QWidget):
         layout.addWidget(caption('Start Session authorizes the fixed READ-ONLY research profile: all eligible standard sensors, eligible RAW-only 017A/0188, DPF Priority, ≤4 total req/s. No individual selection or additional consent step.'))
         self.state=QLabel(); self.state.setWordWrap(True); layout.addWidget(self.state)
         self.metrics=QLabel(); self.metrics.setWordWrap(True); layout.addWidget(self.metrics)
+        self.idle_status=caption('Post-Finish Bluetooth idle on this vehicle is unverified until separate passive evidence is collected.');layout.addWidget(self.idle_status)
+        self.idle_verify=window.button('Verify 60s silent idle · no OBD requests',lambda:window.send('session_idle_verify'));layout.addWidget(self.idle_verify)
         dpf_box=QGroupBox('017A RAW research evidence'); dpf_layout=QVBoxLayout(dpf_box)
         self.dpf=QLabel(); self.dpf.setWordWrap(True); dpf_layout.addWidget(self.dpf)
         dpf_layout.addWidget(caption('Six-byte replies have no verified pressure, soot, ash or regeneration meaning. READY requires two stored polling replies and worker-confirmed scheduling; Discovery does not count.'))
@@ -80,6 +82,7 @@ class SessionPanel(QWidget):
 
     def acknowledge(self,data):
         self.snapshot=data
+        self.window.pending_actions.pop('session_idle_verify',None)
         acknowledgements={
             'session_connect':{'CONNECTED','DISCONNECTED','FAILED','EXPORTED'},
             'session_start':{'RECORDING_SETUP','DISCOVERING','CONFIGURED','WAITING_RAW','READY','CAPTURING','PARTIAL','FAILED','EXPORTED'},
@@ -105,6 +108,9 @@ class SessionPanel(QWidget):
         w=self.window; d=self.snapshot; state=d.get('state','DISCONNECTED'); active=d.get('active',False)
         pending=any(a.startswith('session_') for a in w.pending_actions)
         idle_connected=bool(d.get('adapter_open') and not w.requires_reconnect and not active)
+        idle=d.get('idle_validation') or {}
+        self.idle_verify.setEnabled(bool(idle_connected and state=='EXPORTED' and idle.get('state')=='NOT_REQUESTED'))
+        self.idle_status.setText(('Passive idle '+idle.get('state','')+f' · after Finish {idle.get("post_finish_elapsed_seconds",0):.1f}s · verification {idle.get("verification_elapsed_seconds",0):.1f}/60s · sends {idle.get("start_send_count",0)} → {idle.get("current_send_count",0)} · idle requests {idle.get("idle_requests",0)}\n'+idle.get('reason','')+('\nPrivate sidecar: '+idle['receipt_path'] if idle.get('receipt_path') else '')) if idle else 'No post-export silent-idle proof. LIVE retention must be observed separately; export completion alone is not proof.')
         self.connect.setEnabled(not active and not pending and not idle_connected and not d.get('isolated_handle') and state not in {'CONNECTED','CONNECTING','FINALIZING'} and not w.recording_id)
         self.start.setEnabled((state=='CONNECTED' or state=='EXPORTED' and idle_connected or (getattr(w,'connection_detail',None) or {}).get('stage')=='CONNECTED_IDLE' and w.adapter_open) and not active and not pending and not w.requires_reconnect and not w.recording_id and not w.capture_active)
         self.finish.setEnabled(active and not pending and state!='FINALIZING')
@@ -137,6 +143,7 @@ class SessionPanel(QWidget):
             f'   ·   Port {"CLOSED" if recorded_mode and not d.get("adapter_open") else d.get("port") or w.port.currentText()}   ·   ECU {ecu_display or "not confirmed"}')
         self.state.setText(state+(' · CONNECTED IDLE' if state=='EXPORTED' and idle_connected else '')+' · '+d.get('reason','Connect explicitly; no recording is open')+
             (' · awaiting worker acknowledgment' if pending else '')+(('\n'+d['export_error']) if d.get('export_error') else ''))
+        if d.get('capture_outcome')=='ABORTED':self.state.setText(self.state.text()+'\nCAPTURE ABORTED · export '+str(d.get('export_outcome','PENDING'))+' · connection '+str(d.get('connection_state','UNKNOWN')))
         if 'session_finish' in w.pending_actions:
             self.state.setText('FINISH REQUESTED · completing the current bounded reply, then saving. No next polling request. Await worker confirmation.')
         if d.get('isolated_handle'):

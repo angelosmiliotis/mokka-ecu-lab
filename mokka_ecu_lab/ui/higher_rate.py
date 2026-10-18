@@ -23,7 +23,7 @@ class HigherRatePanel(QWidget):
         title=QLabel('Higher-rate research');title.setObjectName('pageTitle');layout.addWidget(title)
         self.lock_state=caption('LIVE >4: LOCKED · Separate precise authorization and engineering review required.')
         self.lock_state.setObjectName('sourceIdentity');layout.addWidget(self.lock_state)
-        layout.addWidget(caption('Normal Session and Benchmark remain ≤4 total req/s. Four is the approved policy ceiling; hardware capacity above it has not been established.'))
+        layout.addWidget(caption('1–4 req/s: normal LIVE policy. 5 req/s: FAKE COM only, physical LOCKED. 6 req/s: not authorized. Hardware capacity above four has not been established.'))
         row=FlowLayout();self.live_start=QPushButton('Experimental LIVE · LOCKED');self.live_start.setEnabled(False)
         self.live_start.setAccessibleName('Experimental LIVE locked; fake COM engine implemented, physical backend unavailable')
         self.live_start.setToolTip('The separate 5/s byte engine is validated with fake COM. A separately reviewed hardware build and precise operator authorization are still required; no configuration unlock exists.')

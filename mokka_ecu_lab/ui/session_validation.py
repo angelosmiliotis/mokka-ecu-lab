@@ -84,11 +84,17 @@ def install_session_validation(window,app,root,*,minimum_samples=2,observer=None
                     original_journal_unchanged=True,full_acquisition_receipt=True)
                 assert max(gaps)<1.5,('UI responsiveness',max(gaps))
                 idle_started=time.monotonic();idle_count=len(wire);stage='idle-proof'
+                assert window.session_panel.idle_verify.isEnabled();window.session_panel.idle_verify.click()
             elif stage=='idle-proof':
                 assert window.worker.transport is handle and len(wire)==idle_count and not window.worker.recorder
                 assert handle.operation_deadline_ns is None and not window.worker.polling
-                if now-idle_started>=60:
+                idle=d.get('idle_validation') or {}
+                if now-idle_started>=60 and idle.get('state')=='VERIFIED':
+                    receipt=json.loads(Path(idle['receipt_path']).read_text(encoding='utf-8'))
+                    assert receipt['idle_requests']==0 and receipt['same_local_handle'] and receipt['source_mode']=='SIMULATED'
+                    assert receipt['original_bundle_sha256']==hashlib.sha256(Path(d['bundle_path']).read_bytes()).hexdigest()
                     result.update(idle_requests=0,idle_observed_seconds=now-idle_started,same_transport_retained=True)
+                    result.update(passive_idle_receipt_verified=True,passive_verification_seconds=receipt['verification_elapsed_seconds'],original_bundle_unchanged_after_idle=True)
                     window.session_panel.disconnect.click();stage='disconnect'
             elif stage=='disconnect' and not window.worker.transport and not window.adapter_open:
                 result.update(adapter_disconnected=True,explicit_disconnect_verified=True)
