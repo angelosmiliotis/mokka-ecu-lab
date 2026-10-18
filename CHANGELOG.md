@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.14 — Approved upgrade transaction and passive post-export evidence
+
+- One approved install/startup-check/atomic-CURRENT/dispatcher verification transaction replaces the split installation and activation workflow. The GUI closes before a separate packaged helper changes versions; old builds, private data and the same verified Desktop/Start Menu shortcut bytes remain intact. Exact state/digest/shortcut/process checks, a Windows old-executable start guard, failure rollback and explicit recovery protect updates. Older installs require explicit rollback rather than accidental downgrade.
+- App Versions distinguishes running version, managed CURRENT/rollback, explicitly checked GitHub metadata and actual shortcut target. Metadata lookup never downloads or installs automatically. Fresh verified shortcut creation is previewed; changed, missing, legacy direct-EXE and unrelated shortcuts are preserved and block silent replacement. Owner installation and actual Desktop launch remain separate acceptance milestones from publication.
+- Optional sixty-second silent-idle verification uses passive local handle checks and an all-admitted-send counter only. A separate private receipt binds monotonic observations/counters to the session and immutable original-bundle digest. No keepalive, new OBD query, original report edit or false remote-ECU liveness claim is introduced.
+- Repeated ECU conditions-not-correct replies retain original bytes/categories. Recent same-context RPM can support an uncertain engine/ignition hint; no extra probe or saturation diagnosis is made. Capture abort, verified export and connection outcome remain distinct in UI and History.
+- The three sampling profiles, existing decoders/allowlists, flat Reports, rollback and workspace quarantine remain. Controlled PID source and physical-five/s readiness reviews add no hardware authority: normal LIVE remains ≤4/s, five/s fake COM only/physical locked, six/s unauthorized. All public tests and images are synthetic.
+
 ## 0.2.13 — Session connected idle and gated experimental byte engine
 
 - Finish stops future polling, preserves a clean bounded in-flight reply, closes recording and verifies export before retaining a healthy CONNECTED IDLE handle. Explicit Disconnect remains visible. Unsafe prompt/port/I/O, Stop, suspend, shutdown and export failures close or isolate resources truthfully with offline recovery.

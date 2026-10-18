@@ -1,5 +1,11 @@
 # Mokka ECU Lab
 
+Version **0.2.14** adds **Install & activate verified release**: one approved transaction copies an official SHA-verified build, checks disconnected startup, atomically selects CURRENT and verifies the stable Desktop/Start Menu dispatcher. The approving app closes first; the same shortcuts then follow the new CURRENT without a separate activation step. Previous CURRENT remains rollback. Running version, CURRENT, rollback, known GitHub version and shortcut target are shown separately. Changed/personal shortcuts are preserved and block unattended replacement. A published release is not an owner installation until local deployment and actual Desktop launch have been verified.
+
+After Finish, optional **Verify 60s silent idle** observes only local handle state and the global admitted-send counter, then saves a separate private provenance receipt without modifying the original bundle. It sends no diagnostic query. Capture abort, successful export and connection state are distinct; repeated Conditions Not Correct can show an explicitly uncertain engine/ignition hint while preserving every ECU error. Normal read-only acquisition remains one serialized worker at **≤4 total req/s**. **5/s is fake COM only / physical LOCKED; 6/s is not authorized.** [v0.2.14 workflow](docs/V0214_WORKFLOW.md), [physical-backend readiness](docs/V0214_PHYSICAL_BENCHMARK_READINESS.md), [controlled PID source register](research/V0214_SOURCE_REGISTER.md).
+
+The preceding v0.2.13 scope follows for context:
+
 Version **0.2.13** keeps a healthy connection after **Finish Session**: close recording, verify the private export, then **EXPORTED · CONNECTED IDLE**, with zero idle diagnostic sends. Visible **Disconnect** closes it. Each explicit new Session or Benchmark refreshes the protocol/ECU/support evidence in a new run context over the retained handle. Unsafe replies, missing prompts, port loss, Stop, suspend, shutdown and storage failures fail closed with explicit recovery states.
 
 The default **Comprehensive · correlated DPF / turbo / SCR** preserves all eligible PIDs and redistributes the same four-request budget between dynamics, context and slower status. The legacy and Critical presets remain available. **Higher-rate research** adds a separately implemented five-request byte engine with fragmented **fake COM** I/O, real policy/parser checks, global accounting and abort coverage. **Physical experimental LIVE remains LOCKED**: no serial backend or configuration unlock is shipped. The legacy scalar offline model remains distinct.
@@ -17,6 +23,8 @@ A locally runnable Windows 11 desktop application for read-only OBD-II acquisiti
 ## Run on this computer
 
 The project environment is already installed. Download the versioned Windows package from [GitHub Releases](https://github.com/angelosmiliotis/mokka-ecu-lab/releases), extract it and double-click **MokkaECULab/MokkaECULab.exe**. Keep its `_internal` folder beside it. Older local release folders retain their original versions.
+
+For an existing managed Desktop installation, use **App Versions → Install & activate verified release**, review the exact preview and approve closure/upgrade. Then open the same **Mokka ECU Lab** shortcut. Extracting or publishing a portable ZIP alone does not update CURRENT. Conflicting shortcuts require separate review and are never silently overwritten.
 
 For source execution, double-click **launch.cmd**, or from this directory:
 
@@ -86,7 +94,7 @@ Optional executable build, using the supplied build script:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-The script prints the executable path under `%LOCALAPPDATA%\MokkaECULab\Development\v0.2.13\Candidates\candidate-<timestamp>\MokkaECULab\MokkaECULab.exe`. It refuses a fourth default candidate until existing outputs have been explicitly reviewed or archived. An explicit `-OutputDirectory` must also be fresh. Temporary build work created by that invocation is removed after a strict boundary check; existing builds and personal data are never automatically removed. The GUI package includes its separately built stable dispatcher in `_internal/launcher`. Distribute the entire `MokkaECULab` folder, including `_internal`, rather than just the executable. Source is the authoritative project; binaries do not eliminate the hardware validation boundary.
+The script prints the executable path under `%LOCALAPPDATA%\MokkaECULab\Development\v0.2.14\Candidates\candidate-<timestamp>\MokkaECULab\MokkaECULab.exe`. It refuses a fourth default candidate until existing outputs have been explicitly reviewed or archived. An explicit `-OutputDirectory` must also be fresh. Temporary build work created by that invocation is removed after a strict boundary check; existing builds and personal data are never automatically removed. The GUI package includes its separately built stable dispatcher in `_internal/launcher`. Distribute the entire `MokkaECULab` folder, including `_internal`, rather than just the executable. Source is the authoritative project; binaries do not eliminate the hardware validation boundary.
 
 The checked-in PyInstaller spec excludes foreign ICU DLLs from the builder's PATH. In this environment Poppler's versioned ICU was otherwise collected and caused Qt startup to fail; Qt 6.12 uses the unversioned Windows 11 ICU API. The build deliberately uses the target OS library. It is a Windows 11 build, not a compatibility claim for older Windows versions.
 
