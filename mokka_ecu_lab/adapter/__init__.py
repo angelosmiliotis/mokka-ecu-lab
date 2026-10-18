@@ -23,6 +23,7 @@ from mokka_ecu_lab.capture import capture_plan, DECODER_VERSION
 from mokka_ecu_lab.layouts import RAW_ONLY_PIDS, layout_evidence
 from mokka_ecu_lab.auto_capture import auto_plan, AcquisitionReceipt, PRESETS, affirmative_bitmap
 from mokka_ecu_lab import __version__
+from mokka_ecu_lab.ignition import IgnitionContext
 from mokka_ecu_lab.session import SessionCoordinator, CONFLICTS, export_closed_session, recover_interrupted_session
 
 
@@ -53,6 +54,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.benchmark=None
         self.connection_state={'stage':'DISCONNECTED','reason':'No open handle; OS pairing state unknown'}
         self.idle_health_checked=time.monotonic()
+        self.post_idle=None;self.idle_transport=None
         self.registry = load_registry()
         self.selected = list(self.registry)
         self.adapter, self.protocol, self.port, self.mode = "Unknown", "Unknown", "", "Disconnected"
@@ -83,6 +85,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.failures = 0
         self.requires_reconnect = False
         self.context_id = uuid.uuid4().hex
+        self.ignition_context=IgnitionContext()
         self.rate = 4.0
         self.pacing=AdaptivePacing(self.rate)
         self.range_configuration={}
@@ -250,6 +253,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             record['support_evidence'] = {e:sorted(p) for e,p in self.support.items()}
             record['support_pages'] = {e:sorted(p) for e,p in self.support_pages.items()}
         self.retain_discovery_errors(record)
+        self.ignition_context.observe(record,readings)
         if self.recorder: self.recorder.append(record, readings)
         if self.session.active and self.capture_mode and not self.auto_starting and not self.benchmark:
             if self.pacing.observe(record,time.monotonic()):
@@ -644,7 +648,9 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
 
     def fresh_acquisition_context(self):
         """Keep the handle and its global send clock, discard every old evidence gate."""
+        self.end_idle_observation('New explicit acquisition; previous idle observation ended')
         self.context_id=uuid.uuid4().hex
+        self.ignition_context=IgnitionContext()
         self.support={};self.support_pages={};self.bitmap_evidence={};self.bitmap_conflicts=set()
         self.discovery_observations={};self.range_configuration={};self.positive_wire_evidence={}
         self.discovery_prepared=self.discovery_completed=self.discovery_active=False
@@ -681,9 +687,25 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         if gap<1:return
         self.idle_health_checked=now
         status=self.transport.idle_status()
+        self.observe_idle(now)
         if gap>15 or not all(status.get(k) for k in ('open','prompt_synchronized')):
             reason='Idle connection invalid or possible suspension; explicit reconnect required. '+status.get('reason','')
             self.disconnect();self.set_polling(False,reason,requires_reconnect=True);self.connection_stage('RECONNECT_REQUIRED',reason);self.emit('notice',reason)
+
+    def observe_idle(self,now=None):
+        if not self.post_idle:return
+        now=time.monotonic() if now is None else now
+        self.post_idle.observe(now,getattr(self.transport,'wire_send_count',self.post_idle.data['current_send_count']),self.healthy_idle_transport(),self.transport is self.idle_transport)
+        try:self.post_idle.save(self.root/'PostExportEvidence'/self.post_idle.data['session_id'])
+        except Exception as exc:self.emit('notice','Passive receipt could not save; original export unchanged: '+str(exc))
+        self.publish_session(True)
+
+    def end_idle_observation(self,reason):
+        if self.post_idle:
+            self.post_idle.end(reason)
+            try:self.post_idle.save(self.root/'PostExportEvidence'/self.post_idle.data['session_id'])
+            except Exception as exc:self.emit('notice','Passive receipt save failed; original bundle preserved: '+str(exc))
+        self.idle_transport=None
 
     def close_recording(self):
         if self.recorder:
@@ -708,6 +730,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         self.emit("recording", None)
 
     def disconnect(self, finish_recording=True):
+        self.end_idle_observation('Disconnected, Stop/suspend/shutdown or unsafe connection; no idle verification continues')
         if self.auto_receipt and not self.auto_starting and self.auto_receipt.data['state'] not in {'FINISHED','ABORTED'}:
             self.auto_stage('STOPPED', 'Adapter disconnected; no automatic reconnect')
         self.capture_mode = False
@@ -738,6 +761,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             "handle_close_confirmed":not bool(self.unclosed_transport),"isolated_handle":bool(self.unclosed_transport)})
 
     def initialize(self, options):
+        self.ignition_context=IgnitionContext()
         if self.unclosed_transport:
             raise TransportError('Previous handle close is unconfirmed; retry explicit Disconnect or restart before opening another COM handle')
         # An empty pre-connect recorder is allowed; captured sources never share a session.
@@ -885,6 +909,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             handle_close_confirmed=not bool(self.unclosed_transport),isolated_handle=bool(self.unclosed_transport),
             polling_active=self.polling,requires_reconnect=self.requires_reconnect,
             receipt=self.auto_receipt.snapshot() if self.auto_receipt and self.auto_receipt.data.get('session_id')==data.get('session_id') else data.get('exported_acquisition_receipt'))
+        data['idle_validation']=self.post_idle.snapshot() if self.post_idle and self.post_idle.data['session_id']==data.get('session_id') else None
         if self.recorder:
             data.update(session_id=self.recorder.id,journal_path=str(self.recorder.path.resolve()),
                 recorded_transactions=self.recorder.count,transaction_errors=self.recorder.errors)
@@ -960,7 +985,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             self.auto_receipt.data['pre_connect_initialization_recorded']=False
             self.save_capture_evidence(); self.publish_session(True)
         except Exception as exc:
-            self.session_stage('PARTIAL' if isinstance(exc,Cancelled) else 'FAILED',str(exc)+'; Finish Session preserves and exports available evidence')
+            self.session_stage('PARTIAL' if isinstance(exc,Cancelled) else 'FAILED',str(exc)+'; Finish Session preserves and exports available evidence',capture_outcome='PARTIAL' if isinstance(exc,Cancelled) else 'ABORTED')
             if not isinstance(exc,Cancelled): self.set_polling(False,str(exc),requires_reconnect=True)
             if isinstance(exc,TransportError) and not isinstance(exc,Cancelled) or self.requires_reconnect:
                 self.disconnect()
@@ -982,6 +1007,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
     def finish_standard_session(self, keep_connected=True):
         if not self.session.active: self.publish_session(True); return
         session_id=self.recorder.id if self.recorder else self.session.data.get('session_id')
+        if self.session.data.get('capture_outcome') not in ('ABORTED','PARTIAL'):self.session.data['capture_outcome']='COMPLETED'
         try:
             self.session_stage('FINALIZING','Stopping acquisition, closing original journal, then verifying the automatic private bundle')
             if self.recorder:
@@ -1002,6 +1028,10 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
             keep=keep_connected and self.healthy_idle_transport() and not self.stop_io.is_set() and not self.quit_event.is_set()
             if keep:
                 self.idle_health_checked=time.monotonic()
+                from mokka_ecu_lab.idle_evidence import SilentIdle
+                try:self.post_idle=SilentIdle(session_id,result['bundle_path'],self.mode,self.transport.wire_send_count,time.monotonic());self.idle_transport=self.transport
+                except Exception as exc:
+                    self.post_idle=None;self.idle_transport=None;self.emit('notice','Export verified; optional passive idle evidence unavailable: '+str(exc))
                 self.connection_stage('CONNECTED_IDLE','Verified session exported; retained handle, zero idle requests; physical availability rechecked on next Start')
             else:
                 self.disconnect(finish_recording=False)
@@ -1057,6 +1087,12 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
         elif action=='session_start': self.start_session(options)
         elif action=='session_finish': self.finish_standard_session()
         elif action=='session_export_retry': self.retry_session_export(options)
+        elif action=='session_idle_verify':
+            if self.post_idle and not self.session.active and not self.recorder and self.healthy_idle_transport() and self.transport is self.idle_transport:
+                try:self.post_idle.request(time.monotonic());self.observe_idle()
+                except Exception as exc:self.emit('session_rejected',str(exc))
+            else:self.emit('session_rejected','Verified export and same healthy idle handle required; no request sent')
+            self.publish_session(True)
         elif action == 'full_auto': self.full_auto(options)
         elif action == 'retry_auto':
             if not self.auto_receipt or not self.transport or self.requires_reconnect or self.replay or not self.recorder or not self.discovery_prepared:
@@ -1254,7 +1290,7 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                             self.emit_capture('Candidate disabled after invalid current reply');continue
                         self.failures = self.failures + 1 if record["status"] != "OK" else 0
                         if self.failures >= 3:
-                            reason = ("Conditions Not Correct (7F 01 22); ignition state is not confirmed"
+                            reason = (self.ignition_context.explanation(record['monotonic_ns'])
                                       if any(r["nrc"] == "22" for r in record["negative_responses"])
                                       else record["error"] or "Invalid ECU reply")
                             self.set_polling(False, reason, requires_reconnect=True)
@@ -1265,6 +1301,8 @@ class AcquisitionWorker(BenchmarkWorkflow,threading.Thread):
                             self.emit_discovery(False, reason)
                             self.emit("notice", f"Polling stopped after three consecutive ECU failures: {reason}. Values are stale. Stop Recording, check ignition and reconnect explicitly.")
                             if self.auto_receipt: self.auto_stage('ABORTED',reason+'; reconnect explicitly')
+                            if self.session.active:self.session_stage('PARTIAL',reason,active=True,capture_outcome='ABORTED',export_outcome='PENDING',ecu_availability='UNAVAILABLE; adapter handle alone is not ECU confirmation')
+                            self.connection_stage('ECU_UNAVAILABLE',reason)
                     except Cancelled:
                         self.set_polling(False, "Polling canceled", self.requires_reconnect)
                         if self.session.active and self.session.finish_requested: self.finish_standard_session()
