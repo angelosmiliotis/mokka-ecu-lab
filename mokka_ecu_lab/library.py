@@ -71,7 +71,7 @@ def run_facts(summary):
         status='COMPLETED' if b.get('completed') else 'STOPPED' if any(x in reason.lower() for x in ('intentional_stop','shutdown','explicit disconnect')) else 'FAILED_COM_OPEN' if b.get('failure_stage')=='FAILED_COM_OPEN' or 'open port' in reason.lower() or 'failed_com_open' in reason.lower() else 'PREFLIGHT_FAILED' if b.get('measurement_started_monotonic') is None else 'MEASUREMENT_FAILED'
     if not b:
         coordinator=summary.get('session_coordinator') or {}
-        if coordinator.get('state') in {'FAILED','PARTIAL','INTERRUPTED'}:status='MEASUREMENT_FAILED'
+        if coordinator.get('state') in {'FAILED','PARTIAL','INTERRUPTED'} or coordinator.get('capture_outcome') in ('ABORTED','PARTIAL'):status='MEASUREMENT_FAILED'
     return dict(kind=kind,outcome=status,rate=rate,reason=reason,measured_requests=(b or {}).get('requests'),mode=summary.get('mode','UNKNOWN'))
 
 class PartialExportError(OSError):

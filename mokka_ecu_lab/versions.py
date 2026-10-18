@@ -36,6 +36,8 @@ def running_executables():
 
 class ManagedVersions:
     def __init__(self,root,data_root):
+        raw=Path(root).absolute()
+        if any(linked(p) for p in [raw,*raw.parents]):raise ValueError('Managed installations cannot traverse symbolic links/junctions')
         self.root=Path(root).resolve();self.data_root=Path(data_root).resolve()
         if self.root.is_relative_to(self.data_root) or self.data_root.is_relative_to(self.root):raise ValueError('Installations and personal data must be separate')
         if any((p/'.git').exists() for p in [self.root,*self.root.parents]):raise ValueError('A Git working tree cannot be a managed install root')
@@ -44,6 +46,7 @@ class ManagedVersions:
 
     @contextmanager
     def lock(self):
+        if any(linked(p) for p in [self.root,*self.root.parents]):raise ValueError('Managed root became linked; no writes')
         self.root.mkdir(parents=True,exist_ok=True);path=self.root/'operation.lock'
         try:fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY)
         except FileExistsError:raise ValueError('Another managed update, or an interrupted operation lock, needs review. No files changed.')
@@ -52,6 +55,7 @@ class ManagedVersions:
         finally:path.unlink() # only the lock created by this operation
 
     def state(self):
+        inside(self.root,self.pointer)
         if not self.pointer.exists():return dict(current=None,previous=None)
         value=json.loads(self.pointer.read_text(encoding='utf-8'))
         if set(value)!={'current','previous'}:raise ValueError('Invalid managed current/rollback pointer')
@@ -107,23 +111,25 @@ class ManagedVersions:
     def install(self,plan,approval_token,*,smoke=None):
         self.approve(plan,approval_token)
         if plan!=self.preview_install(plan['source'],plan['release']):raise ValueError('Install preview changed; review again')
-        with self.lock():
-            destination=self.folder(plan['key'])
-            if destination.exists():return self.verify(plan['key'])
-            stage=inside(self.root,self.root/'Staging'/uuid.uuid4().hex);stage.mkdir(parents=True)
-            with zipfile.ZipFile(plan['source']) as z:
-                for row in plan['files']:
-                    out=stage/row['name'];out.parent.mkdir(parents=True,exist_ok=True)
-                    with out.open('xb') as f:f.write(z.read('MokkaECULab/'+row['name']));f.flush();os.fsync(f.fileno())
-            hashes={p.relative_to(stage).as_posix():digest(p) for p in regular_files(stage)}
-            if digest(plan['source'])!=plan['release']['sha256']:raise ValueError('Source archive changed during extraction; no smoke or activation')
-            validation=(smoke or self.smoke)(stage/'MokkaECULab.exe')
-            if validation.get('exit_code')!=0:raise ValueError('Managed smoke must succeed before activation')
-            # Validate that smoke did not create personal data inside the installation.
-            if set(hashes)!={p.relative_to(stage).as_posix() for p in regular_files(stage)} or any(digest(stage/n)!=sha for n,sha in hashes.items()):raise ValueError('Build changed during smoke validation')
-            metadata=dict(key=plan['key'],release=plan['release'],files=hashes,smoke=validation,source_sha256=plan['release']['sha256'],personal_data_root=str(self.data_root),no_deletions=True)
-            write_json(stage/'install-metadata.json',metadata);self.builds.mkdir(parents=True,exist_ok=True);stage.rename(destination)
-            return self.verify(plan['key'])
+        with self.lock():return self._install_locked(plan,smoke=smoke)
+
+    def _install_locked(self,plan,*,smoke=None):
+        destination=self.folder(plan['key'])
+        if destination.exists():return self.verify(plan['key'])
+        stage=inside(self.root,self.root/'Staging'/uuid.uuid4().hex);stage.mkdir(parents=True)
+        with zipfile.ZipFile(plan['source']) as z:
+            for row in plan['files']:
+                out=stage/row['name'];out.parent.mkdir(parents=True,exist_ok=True)
+                with out.open('xb') as f:f.write(z.read('MokkaECULab/'+row['name']));f.flush();os.fsync(f.fileno())
+        hashes={p.relative_to(stage).as_posix():digest(p) for p in regular_files(stage)}
+        if digest(plan['source'])!=plan['release']['sha256']:raise ValueError('Source archive changed during extraction; no smoke or activation')
+        validation=(smoke or self.smoke)(stage/'MokkaECULab.exe')
+        if validation.get('exit_code')!=0:raise ValueError('Managed smoke must succeed before activation')
+        # Validate that smoke did not create personal data inside the installation.
+        if set(hashes)!={p.relative_to(stage).as_posix() for p in regular_files(stage)} or any(digest(stage/n)!=sha for n,sha in hashes.items()):raise ValueError('Build changed during smoke validation')
+        metadata=dict(key=plan['key'],release=plan['release'],files=hashes,smoke=validation,source_sha256=plan['release']['sha256'],personal_data_root=str(self.data_root),no_deletions=True)
+        write_json(stage/'install-metadata.json',metadata);self.builds.mkdir(parents=True,exist_ok=True);stage.rename(destination)
+        return self.verify(plan['key'])
 
     def verify(self,key):
         folder=self.folder(key);metadata=json.loads((folder/'install-metadata.json').read_text(encoding='utf-8'))
@@ -142,6 +148,7 @@ class ManagedVersions:
     def activate(self,plan,approval_token):
         self.approve(plan,approval_token)
         if plan!=self.preview_activation(plan['build']['key']):raise ValueError('Current/rollback state changed; preview again')
+        if any(Path(p['path']).name.lower()=='mokkaeculab.exe' and Path(p['path']).is_relative_to(self.builds) for p in running_executables()['processes']):raise ValueError('Close the managed GUI before activating CURRENT')
         with self.lock():
             old=self.state();key=plan['build']['key']
             if old['current']==key:return old
@@ -154,6 +161,7 @@ class ManagedVersions:
         return self.activate(self.preview_activation(previous),approval_token)
 
     def launch_current(self):
+        if (self.root/'operation.lock').exists():raise ValueError('Verified upgrade is in progress; wait before launching CURRENT')
         state=self.state()
         if not state['current']:raise ValueError('Select a verified current build first')
         row=self.verify(state['current']);exe=Path(row['folder'])/'MokkaECULab.exe'
@@ -192,3 +200,14 @@ class ManagedVersions:
             extra_contents=[f['path'] for f in files if Path(f['path']).relative_to(folder).parts[0] not in {'MokkaECULab.exe','_internal'}],
             dependency_complete=(folder/'_internal/PySide6/Qt6Core.dll').is_file(),running_pids=[p['pid'] for p in processes['processes'] if Path(p['path']).is_relative_to(folder)],
             write_permission=os.access(folder,os.W_OK),action='PREVIEW ONLY; no move/delete/activation authorized',no_deletions=True)
+
+
+def latest_release_info():
+    """Explicit metadata lookup only; never downloads/installs an asset."""
+    request=Request('https://api.github.com/repos/'+REPOSITORY+'/releases?per_page=50',headers={'User-Agent':'MokkaECULab-explicit-release-check','Accept':'application/vnd.github+json'})
+    with urlopen(request,timeout=20) as response:payload=response.read(2_000_001)
+    if len(payload)>2_000_000:raise ValueError('Release metadata too large')
+    rows=[r for r in json.loads(payload) if not r.get('draft') and re.fullmatch(r'v\d+\.\d+\.\d+',r.get('tag_name',''))]
+    if not rows:raise ValueError('No published version found')
+    tag=max(rows,key=lambda r:tuple(map(int,r['tag_name'][1:].split('.'))))['tag_name']
+    return release_info(tag)

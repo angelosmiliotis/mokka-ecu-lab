@@ -29,6 +29,7 @@ class SessionCoordinator:
 
     def begin(self):
         self.data.update(active=True, session_id=None, bundle_path=None, export_error=None,
+            capture_outcome='IN_PROGRESS',ecu_availability='VERIFYING',
             checksums_verified=False,retry_export=False,recorded_mode=None,recorded_ecus=[],exported_acquisition_receipt=None,
             recorded_transactions=0,transaction_errors=0,journal_closed=False,journal_path=None,duration_seconds=0,
             started_at=utc_now(), pre_connect_initialization_recorded=False,
