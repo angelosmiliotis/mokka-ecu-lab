@@ -141,3 +141,14 @@ def test_extended_decode_annotations_are_not_a_discovery_phase(tmp_path):
     assert rows['7A']['repeated_polling'] and rows['7A']['polling_replies']==2 and rows['7A']['role_counts']=={'POLLING':2}
     assert rows['83']['polling_replies']==1 and rows['83']['role_counts']=={'POLLING':1}
     assert rows['0C']['role_counts']=={'DISCOVERY':1,'POLLING':2}
+
+
+def test_raw_research_annotation_cites_the_registered_definition(tmp_path):
+    """Research prose must not contradict the separately registered definition."""
+    from mokka_ecu_lab.sensors.diesel import STANDARD_DIESEL
+    group=analyze_explorer([bundle(tmp_path/'constructed.zip')])['sessions'][0]['groups'][0]
+    row=next(r for r in group['rows'] if r['pid']=='7A')
+    from mokka_ecu_lab.research.definition_status import research_status
+    note=research_status(0x7A)['interpretation']
+    assert STANDARD_DIESEL[0x7A].metadata()['source_table'] in note
+    assert row['representation']=='RAW_ONLY' and row['valid_field_count']==0
