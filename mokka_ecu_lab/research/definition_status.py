@@ -7,7 +7,7 @@ def research_status(pid):
         licensed_current_byte_table_obtained=False,physical_calibration='UNVERIFIED',new_live_requests_authorized=False)
     notes={
         0x01:'Pure offline readiness definition: APR2002 B2/B3 byte basis plus EPA2013 ignition mapping. No positive reply is implied; no LIVE admission. Completion is not absence of faults or DPF regeneration.',
-        0x7A:'OCT2011 B101 requires exactly seven data bytes. A different complete length remains RAW_ONLY. An unsigned byte-pair hypothesis has no established physical unit. Require exact normative revision/table, reserved/sentinel rules and independent calibrated comparison before promotion. No pressure, soot, ash or regeneration inferred.',
+        0x7A:'OCT2011 B102 requires exactly seven data bytes. A different complete length remains RAW_ONLY. An unsigned byte-pair hypothesis has no established physical unit. Require exact normative revision/table, reserved/sentinel rules and independent calibrated comparison before promotion. No pressure, soot, ash or regeneration inferred.',
         0x8C:'OCT2011 B119 requires exactly seventeen data bytes. Preserve every byte of alternate-length responses; no padding, shifting, slot collapse or alternate revision inferred. Exact licensed alternate table and controlled evidence required.',
         0x9D:'No exact definition verified in the consulted OCT2011 source. Support bit alone cannot identify a measurement or authorize a request. No guessed field, length, unit or scaling.',
         0x4F:'Range configuration, not a current physical measurement. Only exact same-source prior supported configuration can change MAP scaling; selector zero retains the default. Byte ceiling is not an independently measured pressure beyond the encoded value.',
