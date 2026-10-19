@@ -2,7 +2,9 @@
 
 ## Version 0.2.15 release validation
 
-**967 tests passed** in the final full regression (550.44 s). Constructed cases cover independent support/response/layout/polling gates, field multiplicity and absent subfields, staleness, context conflicts, duplicate journals including distinct zero-request failures, repeated-send evidence, exact alternate RAW preservation, private exports and CSV formula-injection protection. Extended decode annotations are not mistaken for a Discovery phase. Exact selected-container SHA-256, canonical verified-member manifest identity and journal SHA-256 are separately labeled and checked.
+**968 tests passed** in the final full regression (364.40 s). Constructed cases cover independent support/response/layout/polling gates, field multiplicity and absent subfields, staleness, context conflicts, duplicate journals including distinct zero-request failures, repeated-send evidence, exact alternate RAW preservation, private exports and CSV formula-injection protection. Extended decode annotations are not mistaken for a Discovery phase. Exact selected-container SHA-256, canonical verified-member manifest identity and journal SHA-256 are separately labeled and checked.
+
+The RAW research annotation is cross-checked against the separately registered OCT2011 definition: 017A cites B102 consistently. This reference correction does not change bytes, decoding, units or LIVE request admission.
 
 The pure offline 0101 tests cover ignition-specific applicability, MIL/DTC masking, readiness completion, wrong lengths and reserved bits. It remains absent from the LIVE allowlist. No new vehicle decoder, sensor calibration or diagnostic request is claimed.
 
