@@ -4,7 +4,7 @@ The [SAE J1979DA July 2026 catalog](https://saemobilus.sae.org/standards/j1979da
 
 | Identifier | Implemented research boundary |
 |---|---|
-| 017A | Existing OCT2011 B101 exact seven-data-byte definition; alternate complete lengths remain RAW-only. No guessed pressure, soot, ash or regeneration. |
+| 017A | Existing OCT2011 B102 exact seven-data-byte definition; alternate complete lengths remain RAW-only. No guessed pressure, soot, ash or regeneration. |
 | 018C | Existing OCT2011 B119 exact seventeen-data-byte definition; alternate lengths retain every original byte, without padding or shifting. |
 | 0101 | Pure offline composite: [SAE J1979 APR2002 B2/B3](https://law.resource.org/pub/us/cfr/ibr/005/sae.j1979.2002.pdf) supplies legacy byte positions; [EPA March 2013 Table 2](https://www.epa.gov/system/files/documents/2022-08/diesel-obd-im-readiness-14k-pounds-gwr-best-practices.pdf) supplies ignition-specific monitor mapping/B3. The old standard reserves B3; the later mapping is explicitly a composite, not a claimed current licensed definition. No LIVE admission. |
 | 019D | Exact normative definition unverified; no guessed layout, unit or request admission. |
